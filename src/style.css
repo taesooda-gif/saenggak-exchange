@@ -142,5 +142,17 @@ body { margin:0; background:light-dark(#fff,#17181b); }
 #sg-community .sg-chart-placeholder { color:var(--sg-soft); font-size:13px; min-height:96px; display:flex; align-items:center; }
 #sg-community .sg-market-chart { height:76px; }
 .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+#sg-community .sg-discussion { display:flex; justify-content:space-between; align-items:center; gap:16px; margin-top:20px; padding:16px 18px; background:var(--sg-wash); border-radius:var(--sg-radius); }
+#sg-community .sg-discussion strong { font-size:15px; }
+#sg-community .sg-discussion p { margin-top:5px; }
+#sg-community .sg-discussion-privacy { color:var(--sg-soft); font-size:12px; }
+#sg-community .sg-discussion-button { flex-shrink:0; color:var(--sg-accent-ink); background:var(--sg-paper); }
+#sg-community #detail-together { margin-bottom:28px; }
+#sg-community .sg-room-context { margin-top:20px; padding:16px 18px; background:var(--sg-bg); border-radius:var(--sg-radius); }
+#sg-community .sg-room-context strong { font-size:15px; }
+#sg-community .sg-room-context p { margin-top:8px; font-size:14px; color:var(--sg-soft); }
+#sg-community .sg-room-context .sg-button { margin-top:8px; }
+#sg-community .sg-section-top h1 + p { margin-top:8px; }
+@media(max-width:620px) { #sg-community .sg-discussion { align-items:flex-start; flex-direction:column; gap:12px; padding:15px; } }
 @media(max-width:900px) { #sg-community .sg-brand { width:auto; padding-right:0; } #sg-community .sg-nav { order:3; flex-basis:100%; } #sg-community .sg-header { gap:12px; } }
 @media(max-width:620px) { #sg-community .sg-profile { font-size:12px; padding:7px; max-width:122px; } #sg-community .sg-chat-list { border-bottom:1px solid var(--sg-line); } #sg-community .sg-actions .sg-button { font-size:13px; } }

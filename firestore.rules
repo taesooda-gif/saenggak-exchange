@@ -32,7 +32,7 @@ service cloud.firestore {
       allow get: if true;
       allow list: if bounded(20);
       allow create: if named(request.resource.data)
-        && request.resource.data.keys().hasOnly(['title', 'body', 'topic', 'authorId', 'authorName', 'createdAt', 'lastActivityAt', 'interestCount', 'contributionCount', 'lastContributionId'])
+        && request.resource.data.keys().hasOnly(['title', 'body', 'topic', 'authorId', 'authorName', 'createdAt', 'lastActivityAt', 'interestCount', 'contributionCount', 'lastContributionId', 'participantCount', 'lastChatAt', 'lastChatMessageId'])
         && request.resource.data.title is string && request.resource.data.title.size() >= 1 && request.resource.data.title.size() <= 100
         && request.resource.data.body is string && request.resource.data.body.size() <= 2000
         && request.resource.data.topic in ['나의 다음 일', '아이의 내일', '생활 속 생각', '엉뚱한 상상']
@@ -40,7 +40,10 @@ service cloud.firestore {
         && request.resource.data.lastActivityAt == request.time
         && request.resource.data.interestCount == 0
         && request.resource.data.contributionCount == 0
-        && request.resource.data.lastContributionId == '';
+        && request.resource.data.lastContributionId == ''
+        && request.resource.data.get('participantCount', 1) == 1
+        && request.resource.data.get('lastChatAt', null) == null
+        && request.resource.data.get('lastChatMessageId', '') == '';
 
       function interestChange() {
         let path = /databases/$(database)/documents/ideas/$(id)/interests/$(request.auth.uid);
@@ -68,7 +71,22 @@ service cloud.firestore {
           && getAfter(path).data.createdAt == request.time
           && getAfter(event).data.createdAt == request.time;
       }
-      allow update: if signedIn() && (interestChange() || contributionChange());
+      function participantChange() {
+        return member(id)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['participantCount'])
+          && request.resource.data.participantCount == getAfter(roomPath(id)).data.memberIds.size();
+      }
+      function discussionChange() {
+        let next = request.resource.data;
+        let message = getAfter(/databases/$(database)/documents/rooms/$(id)/messages/$(next.lastChatMessageId));
+        return member(id)
+          && next.diff(resource.data).affectedKeys().hasOnly(['participantCount', 'lastChatAt', 'lastChatMessageId'])
+          && next.participantCount == getAfter(roomPath(id)).data.memberIds.size()
+          && next.lastChatAt is timestamp
+          && next.lastChatAt == message.data.createdAt
+          && (resource.data.get('lastChatAt', null) == null || next.lastChatAt >= resource.data.lastChatAt);
+      }
+      allow update: if signedIn() && (interestChange() || contributionChange() || participantChange() || discussionChange());
       allow delete: if false;
 
       match /interests/{uid} {

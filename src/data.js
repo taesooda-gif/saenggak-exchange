@@ -2,7 +2,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInAnonymously, connectAuthEmulator } from 'firebase/auth';
 import {
   getFirestore, connectFirestoreEmulator, collection, doc, getDoc, getDocs,
-  setDoc, addDoc, query, where, orderBy, limit, startAfter, onSnapshot,
+  setDoc, query, where, orderBy, limit, startAfter, onSnapshot,
   serverTimestamp, writeBatch, runTransaction, increment, arrayUnion, documentId,
 } from 'firebase/firestore';
 
@@ -64,6 +64,7 @@ export async function createIdea(store, person, { title, body, topic }) {
     title, body, topic, authorId: person.uid, authorName: person.name,
     createdAt: serverTimestamp(), lastActivityAt: serverTimestamp(),
     interestCount: 0, contributionCount: 0, lastContributionId: '',
+    participantCount: 1, lastChatAt: null, lastChatMessageId: '',
   });
   batch.set(doc(store.db, 'rooms', ref.id), {
     ownerId: person.uid, title, memberIds: [person.uid], createdAt: serverTimestamp(), lastAddedId: '',
@@ -131,6 +132,7 @@ export async function decideRequest(store, id, uid, accept) {
     if (accept) {
       if (current.data().memberIds.length >= 20) throw new Error('대화방은 20명까지 함께할 수 있어요.');
       transaction.update(room, { memberIds: arrayUnion(uid), lastAddedId: uid });
+      transaction.update(doc(store.db, 'ideas', id), { participantCount: current.data().memberIds.length + 1 });
     }
     transaction.update(request, { status: accept ? 'accepted' : 'declined', decidedAt: serverTimestamp() });
   });
@@ -144,5 +146,33 @@ export async function olderMessages(store, id, before) {
   return snapshot.docs.map(row).reverse();
 }
 export async function sendMessage(store, person, id, text) {
-  await addDoc(collection(store.db, 'rooms', id, 'messages'), { authorId: person.uid, authorName: person.name, text, createdAt: serverTimestamp() });
+  const message = doc(collection(store.db, 'rooms', id, 'messages'));
+  await runTransaction(store.db, async transaction => {
+    const room = await transaction.get(doc(store.db, 'rooms', id));
+    if (!room.exists()) throw new Error('대화방을 찾을 수 없어요.');
+    transaction.set(message, { authorId: person.uid, authorName: person.name, text, createdAt: serverTimestamp() });
+    transaction.update(doc(store.db, 'ideas', id), {
+      participantCount: room.data().memberIds.length,
+      lastChatAt: serverTimestamp(), lastChatMessageId: message.id,
+    });
+  });
+}
+
+// Existing rooms also expose only their participant count and latest activity time.
+// Message text and participant identities stay protected by the room's rules.
+export async function refreshDiscussion(store, id) {
+  const latest = await getDocs(query(collection(store.db, 'rooms', id, 'messages'), orderBy('createdAt', 'desc'), limit(1)));
+  const message = latest.docs[0];
+  await runTransaction(store.db, async transaction => {
+    const parent = doc(store.db, 'ideas', id);
+    const [room, idea] = await Promise.all([transaction.get(doc(store.db, 'rooms', id)), transaction.get(parent)]);
+    if (!room.exists() || !idea.exists()) return;
+    const patch = {};
+    if (idea.data().participantCount !== room.data().memberIds.length) patch.participantCount = room.data().memberIds.length;
+    const time = message?.data().createdAt;
+    if (time && (!idea.data().lastChatAt || time.toMillis() > idea.data().lastChatAt.toMillis())) {
+      patch.lastChatAt = time; patch.lastChatMessageId = message.id;
+    }
+    if (Object.keys(patch).length) transaction.update(parent, patch);
+  });
 }

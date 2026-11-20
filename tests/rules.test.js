@@ -2,7 +2,7 @@ import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
-import { collection, doc, getDoc, getDocs, setDoc, updateDoc, query, where, limit, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, setDoc, updateDoc, query, where, limit, serverTimestamp, deleteField, Timestamp } from 'firebase/firestore';
 import * as api from '../src/data.js';
 
 let env, alice, bob, eve, visitor, id;
@@ -69,4 +69,45 @@ test('프로필과 참여 신청은 본인과 필요한 담당자에게만 보�
   await assertFails(api.getRequest(eve, id, 'bob'));
   await assertSucceeds(api.getRequest(alice, id, 'bob'));
   await assertFails(updateDoc(doc(alice.db, 'rooms', id), { memberIds: ['alice', 'eve'], lastAddedId: 'eve' }));
+});
+
+test('대화를 시작하면 공개 글에는 실제 참여 인원과 시간만 나타난다', async () => {
+  await api.sendMessage(alice, personA, id, '참여자에게만 보이는 대화');
+  const idea = (await getDoc(doc(visitor.db, 'ideas', id))).data();
+  assert.equal(idea.participantCount, 1);
+  assert.ok(idea.lastChatAt.toMillis() > 0);
+  assert.ok(idea.lastChatMessageId);
+  assert.ok(!JSON.stringify(idea).includes('참여자에게만 보이는 대화'));
+  await assertFails(getDoc(doc(visitor.db, 'rooms', id, 'messages', idea.lastChatMessageId)));
+  await api.requestToJoin(bob, personB, id);
+  await api.decideRequest(alice, id, 'bob', true);
+  assert.equal((await getDoc(doc(visitor.db, 'ideas', id))).data().participantCount, 2);
+  await api.sendMessage(bob, personB, id, '같이 해볼 일을 정해요');
+  assert.equal((await getDoc(doc(visitor.db, 'ideas', id))).data().participantCount, 2);
+});
+
+test('참여 인원이나 최근 대화 시간을 조작하거나 다른 모임에서 갱신할 수 없다', async () => {
+  await api.sendMessage(alice, personA, id, '첫 대화');
+  const idea = (await getDoc(doc(visitor.db, 'ideas', id))).data();
+  await assertFails(updateDoc(doc(alice.db, 'ideas', id), { participantCount: 100 }));
+  await assertFails(updateDoc(doc(alice.db, 'ideas', id), { lastChatAt: Timestamp.fromMillis(Date.now() + 86400000) }));
+  await assertFails(updateDoc(doc(eve.db, 'ideas', id), { participantCount: 1 }));
+  await assertFails(updateDoc(doc(eve.db, 'ideas', id), { lastChatAt: idea.lastChatAt, lastChatMessageId: idea.lastChatMessageId }));
+  await assertFails(updateDoc(doc(alice.db, 'ideas', id), { lastChatAt: serverTimestamp(), lastChatMessageId: 'not-a-message' }));
+  await api.sendMessage(alice, personA, id, '다음 대화');
+  await assertFails(updateDoc(doc(alice.db, 'ideas', id), { lastChatAt: idea.lastChatAt, lastChatMessageId: idea.lastChatMessageId }));
+});
+
+test('기존 대화는 참여자가 접속하면 실제 기록에서 공개 활동 표시를 복구한다', async () => {
+  await api.sendMessage(alice, personA, id, '이미 쓰여 있던 비공개 대화');
+  const original = (await getDoc(doc(alice.db, 'ideas', id))).data();
+  await env.withSecurityRulesDisabled(async context => updateDoc(doc(context.firestore(), 'ideas', id), {
+    participantCount: deleteField(), lastChatAt: deleteField(), lastChatMessageId: deleteField(),
+  }));
+  await assertFails(api.refreshDiscussion(eve, id));
+  await assertSucceeds(api.refreshDiscussion(alice, id));
+  const repaired = (await getDoc(doc(visitor.db, 'ideas', id))).data();
+  assert.equal(repaired.participantCount, 1);
+  assert.equal(repaired.lastChatMessageId, original.lastChatMessageId);
+  assert.equal(repaired.lastChatAt.toMillis(), original.lastChatAt.toMillis());
 });

@@ -10,6 +10,7 @@ let cursor, hasMore = false, recentComments = [], previousComments = [], recentM
 let stopFeed, stopRooms, stopIdea, stopComments, stopMessages, stopRequests;
 let identityReady = Promise.resolve(), guestResolve, guestPromise;
 const interestState = new Map(), activityCache = new Map();
+const syncedDiscussions = new Map();
 let requestVersion = 0;
 
 function el(tag, className, text) {
@@ -148,8 +149,22 @@ function actionsFor(idea, compact = false) {
     interest.setAttribute('aria-pressed', String(interested)); actions.append(interest);
   }
   actions.append(button(`보태기 ${idea.contributionCount}`, () => openIdea(idea.id)));
-  if (!compact) actions.append(button(rooms.some(room => room.id === idea.id) ? '함께하는 대화' : '함께하고 싶어요', () => joinIdea(idea), 'sg-button sg-action-link'));
   return actions;
+}
+function discussionCard(idea) {
+  const group = el('section', 'sg-discussion');
+  group.setAttribute('aria-label', '이 생각의 함께하기');
+  const copy = el('div');
+  const mine = rooms.find(room => room.id === idea.id);
+  const count = idea.participantCount || mine?.memberIds.length;
+  const started = Boolean(milliseconds(idea.lastChatAt));
+  copy.append(el('strong', '', started ? '이 생각에서 대화가 시작됐어요' : '이 생각을 더 깊이 나눠볼까요?'));
+  copy.append(el('p', 'sg-caption', started
+    ? `작성자 포함 ${count || 1}명이 함께해요 · 최근 대화 ${when(idea.lastChatAt)}`
+    : '관심이 맞는 사람끼리 주제를 좁히고, 함께 해볼 일을 찾아요.'));
+  copy.append(el('p', 'sg-discussion-privacy', '대화 내용은 참여자에게만 보여요.'));
+  group.append(copy, button(mine ? '함께하는 대화' : '대화에 함께하기', () => joinIdea(idea), 'sg-button sg-discussion-button'));
+  return group;
 }
 function ideaCard(idea, compact) {
   const card = el('article', 'sg-card');
@@ -165,6 +180,7 @@ function ideaCard(idea, compact) {
     requestAnimationFrame(() => observeTrend(trend, idea));
   }
   card.append(meta, body, actionsFor(idea, compact));
+  if (!compact) card.append(discussionCard(idea));
   return card;
 }
 const observer = new IntersectionObserver(entries => entries.forEach(entry => {
@@ -200,7 +216,7 @@ async function openIdea(id, updateHash = true) {
   if (!store) return;
   stopDetail(); stopChat(); selectedId = id; currentIdea = null; previousComments = []; recentComments = [];
   $('#comments').replaceChildren(); $('#detail-title').textContent = '생각을 불러오고 있어요.';
-  $('#detail-body').textContent = ''; $('#detail-meta').replaceChildren(); $('#detail-actions').replaceChildren();
+  $('#detail-body').textContent = ''; $('#detail-meta').replaceChildren(); $('#detail-actions').replaceChildren(); $('#detail-together').replaceChildren();
   $('#join-requests').hidden = true; $('#comment-count').textContent = ''; $('#comment-input').value = ''; kind = '경험'; updateKind();
   displayView('detail');
   if (updateHash) history.replaceState(null, '', `#idea/${encodeURIComponent(id)}`);
@@ -219,6 +235,7 @@ function renderDetail() {
   $('#detail-title').textContent = idea.title; $('#detail-body').textContent = idea.body;
   $('#detail-meta').replaceChildren(el('span', 'sg-tag', idea.topic), el('span', '', `${idea.authorName} · ${when(idea.createdAt)}`));
   $('#detail-actions').replaceChildren(...actionsFor(idea).children);
+  $('#detail-together').replaceChildren(discussionCard(idea));
   $('#comment-count').textContent = `${idea.contributionCount}개`;
 }
 function merged(oldRows, newRows) { return [...new Map([...oldRows, ...newRows].map(item => [item.id, item])).values()].sort((a, b) => milliseconds(a.createdAt) - milliseconds(b.createdAt)); }
@@ -299,7 +316,7 @@ function renderRooms() {
   if (view === 'chat') {
     const selected = rooms.find(room => room.id === selectedRoom?.id) || rooms[0];
     if (!stopMessages || selectedRoom?.id !== selected.id) selectRoom(selected.id);
-    else { selectedRoom = selected; $('#room-members').textContent = `${selected.memberIds.length}명 · 초대받은 사람끼리 나누는 대화`; }
+    else { selectedRoom = selected; $('#room-members').textContent = `${selected.memberIds.length}명 · 초대받은 사람끼리 나누는 대화`; renderRoomContext(selected); }
   }
 }
 function selectRoom(id) {
@@ -307,8 +324,16 @@ function selectRoom(id) {
   stopChat(); selectedRoom = room; recentMessages = []; previousMessages = [];
   $('#chat-empty').hidden = true; $('#chat-content').hidden = false; $('#messages').replaceChildren();
   $('#room-title').textContent = room.title; $('#room-members').textContent = `${room.memberIds.length}명 · 초대받은 사람끼리 나누는 대화`;
+  renderRoomContext(room);
   $('#message-input').value = '';
   stopMessages = api.watchMessages(store, id, (rows, more) => { recentMessages = rows; $('#older-messages').hidden = !more; renderMessages(); }, error => showStatus(errorText(error), true));
+}
+function renderRoomContext(room) {
+  const context = $('#room-context'); context.replaceChildren();
+  context.append(el('strong', '', room.memberIds.length === 1 ? '지금은 작성자 혼자 있어요. 함께할 사람을 기다려요.' : '생각을 조금 더 구체적으로, 함께 이어가요.'));
+  context.append(el('p', '', '대화를 남기면 둘러보기에 참여 인원과 최근 대화 시간이 표시돼요. 대화 내용은 이 모임 안에서만 보여요.'));
+  context.append(el('p', '', '함께 고민할 질문 하나, 작게 해볼 일 하나부터 정해보세요.'));
+  context.append(button('원래 생각과 보탬 보기', () => openIdea(room.id), 'sg-button sg-action-link'));
 }
 function renderMessages() {
   const list = $('#messages'); list.replaceChildren();
@@ -331,7 +356,15 @@ $('#chat-form').addEventListener('submit', event => {
 function identityChanged() {
   $('#profile-button').textContent = profile ? `${profile.displayName}님` : '닉네임으로 시작';
   stopRooms?.(); stopRooms = undefined; rooms = [];
-  if (user && profile) stopRooms = api.watchRooms(store, user.uid, rows => { rooms = rows; renderRooms(); if (view === 'detail') renderDetail(); }, error => showStatus(errorText(error), true));
+  if (user && profile) stopRooms = api.watchRooms(store, user.uid, rows => {
+    rooms = rows; renderRooms(); renderFeed(); if (view === 'detail') renderDetail();
+    rows.forEach(room => {
+      const key = `${user.uid}:${room.id}`;
+      if (syncedDiscussions.get(key) === room.memberIds.length) return;
+      syncedDiscussions.set(key, room.memberIds.length);
+      api.refreshDiscussion(store, room.id).catch(error => { syncedDiscussions.delete(key); console.error(error); showStatus('대화는 사용할 수 있지만, 둘러보기의 참여 표시를 갱신하지 못했어요. 잠시 후 새로고침해주세요.', true); });
+    });
+  }, error => showStatus(errorText(error), true));
   renderRooms(); watchOwnerRequests();
 }
 function route() {

@@ -1,0 +1,162 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function bounded(n) { return request.query.limit != null && request.query.limit <= n; }
+    function ideaPath(id) { return /databases/$(database)/documents/ideas/$(id); }
+    function roomPath(id) { return /databases/$(database)/documents/rooms/$(id); }
+    function owner(id) { return signedIn() && get(ideaPath(id)).data.authorId == request.auth.uid; }
+    function member(id) { return signedIn() && request.auth.uid in get(roomPath(id)).data.memberIds; }
+    function named(data) {
+      return signedIn() && data.authorId == request.auth.uid
+        && data.authorName == get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data.displayName;
+    }
+
+    match /profiles/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list, delete: if false;
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['displayName', 'createdAt'])
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() >= 2
+        && request.resource.data.displayName.size() <= 20
+        && request.resource.data.createdAt == request.time;
+      allow update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName'])
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() >= 2
+        && request.resource.data.displayName.size() <= 20;
+    }
+
+    match /ideas/{id} {
+      allow get: if true;
+      allow list: if bounded(20);
+      allow create: if named(request.resource.data)
+        && request.resource.data.keys().hasOnly(['title', 'body', 'topic', 'authorId', 'authorName', 'createdAt', 'lastActivityAt', 'interestCount', 'contributionCount', 'lastContributionId'])
+        && request.resource.data.title is string && request.resource.data.title.size() >= 1 && request.resource.data.title.size() <= 100
+        && request.resource.data.body is string && request.resource.data.body.size() <= 2000
+        && request.resource.data.topic in ['나의 다음 일', '아이의 내일', '생활 속 생각', '엉뚱한 상상']
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.lastActivityAt == request.time
+        && request.resource.data.interestCount == 0
+        && request.resource.data.contributionCount == 0
+        && request.resource.data.lastContributionId == '';
+
+      function interestChange() {
+        let path = /databases/$(database)/documents/ideas/$(id)/interests/$(request.auth.uid);
+        let event = /databases/$(database)/documents/ideas/$(id)/activities/$('i_' + request.auth.uid);
+        let next = request.resource.data;
+        return next.diff(resource.data).affectedKeys().hasOnly(['interestCount', 'lastActivityAt'])
+          && next.interestCount >= 0
+          && (
+            (!exists(path) && existsAfter(path) && next.interestCount == resource.data.interestCount + 1
+              && ((!exists(event) && getAfter(event).data.createdAt == request.time && next.lastActivityAt == request.time)
+                || (exists(event) && next.lastActivityAt == resource.data.lastActivityAt)))
+            || (exists(path) && !existsAfter(path) && next.interestCount == resource.data.interestCount - 1
+              && next.lastActivityAt == resource.data.lastActivityAt)
+          );
+      }
+      function contributionChange() {
+        let next = request.resource.data;
+        let path = /databases/$(database)/documents/ideas/$(id)/contributions/$(next.lastContributionId);
+        let event = /databases/$(database)/documents/ideas/$(id)/activities/$('c_' + next.lastContributionId);
+        return next.diff(resource.data).affectedKeys().hasOnly(['contributionCount', 'lastContributionId', 'lastActivityAt'])
+          && next.lastContributionId is string && next.lastContributionId.size() > 0
+          && next.contributionCount == resource.data.contributionCount + 1
+          && next.lastActivityAt == request.time
+          && !exists(path) && getAfter(path).data.authorId == request.auth.uid
+          && getAfter(path).data.createdAt == request.time
+          && getAfter(event).data.createdAt == request.time;
+      }
+      allow update: if signedIn() && (interestChange() || contributionChange());
+      allow delete: if false;
+
+      match /interests/{uid} {
+        allow get: if signedIn() && request.auth.uid == uid;
+        allow list, update: if false;
+        allow create: if signedIn() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['createdAt'])
+          && request.resource.data.createdAt == request.time
+          && getAfter(ideaPath(id)).data.interestCount == get(ideaPath(id)).data.interestCount + 1;
+        allow delete: if signedIn() && request.auth.uid == uid
+          && getAfter(ideaPath(id)).data.interestCount == get(ideaPath(id)).data.interestCount - 1;
+      }
+      match /contributions/{cid} {
+        allow get: if true;
+        allow list: if bounded(50);
+        allow create: if named(request.resource.data)
+          && request.resource.data.keys().hasOnly(['authorId', 'authorName', 'kind', 'text', 'createdAt'])
+          && request.resource.data.kind in ['경험', '질문', '제안']
+          && request.resource.data.text is string && request.resource.data.text.size() >= 1 && request.resource.data.text.size() <= 1200
+          && request.resource.data.createdAt == request.time
+          && getAfter(ideaPath(id)).data.lastContributionId == cid
+          && getAfter(ideaPath(id)).data.contributionCount == get(ideaPath(id)).data.contributionCount + 1;
+        allow update, delete: if false;
+      }
+      match /activities/{aid} {
+        allow get: if true;
+        allow list: if bounded(30);
+        allow create: if signedIn()
+          && request.resource.data.keys().hasOnly(['actorId', 'type', 'refId', 'createdAt'])
+          && request.resource.data.actorId == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && getAfter(ideaPath(id)).data.lastActivityAt == request.time
+          && (
+            (request.resource.data.type == 'interest' && request.resource.data.refId == request.auth.uid && aid == 'i_' + request.auth.uid
+              && !exists(/databases/$(database)/documents/ideas/$(id)/interests/$(request.auth.uid))
+              && getAfter(/databases/$(database)/documents/ideas/$(id)/interests/$(request.auth.uid)).data.createdAt == request.time)
+            || (request.resource.data.type == 'contribution' && aid == 'c_' + request.resource.data.refId
+              && getAfter(/databases/$(database)/documents/ideas/$(id)/contributions/$(request.resource.data.refId)).data.authorId == request.auth.uid
+              && getAfter(/databases/$(database)/documents/ideas/$(id)/contributions/$(request.resource.data.refId)).data.createdAt == request.time)
+          );
+        allow update, delete: if false;
+      }
+      match /requests/{uid} {
+        allow get: if signedIn() && (request.auth.uid == uid || owner(id));
+        allow list: if owner(id) && bounded(20);
+        allow create: if signedIn() && request.auth.uid == uid && !owner(id)
+          && !(uid in get(roomPath(id)).data.memberIds)
+          && request.resource.data.keys().hasOnly(['authorId', 'authorName', 'status', 'createdAt', 'decidedAt'])
+          && named(request.resource.data) && request.resource.data.status == 'pending'
+          && request.resource.data.createdAt == request.time && request.resource.data.decidedAt == null;
+        allow update: if owner(id) && resource.data.status == 'pending'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'decidedAt'])
+          && request.resource.data.decidedAt == request.time
+          && (request.resource.data.status == 'declined'
+            || (request.resource.data.status == 'accepted' && uid in getAfter(roomPath(id)).data.memberIds));
+        allow delete: if false;
+      }
+    }
+
+    match /rooms/{id} {
+      allow get: if signedIn() && request.auth.uid in resource.data.memberIds;
+      allow list: if signedIn() && request.auth.uid in resource.data.memberIds && bounded(20);
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['ownerId', 'title', 'memberIds', 'createdAt', 'lastAddedId'])
+        && request.resource.data.ownerId == request.auth.uid
+        && getAfter(ideaPath(id)).data.authorId == request.auth.uid
+        && request.resource.data.title == getAfter(ideaPath(id)).data.title
+        && request.resource.data.memberIds == [request.auth.uid]
+        && request.resource.data.createdAt == request.time && request.resource.data.lastAddedId == '';
+      allow update: if signedIn() && resource.data.ownerId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberIds', 'lastAddedId'])
+        && request.resource.data.memberIds is list && request.resource.data.memberIds.size() <= 20
+        && request.resource.data.memberIds.size() == resource.data.memberIds.size() + 1
+        && request.resource.data.memberIds.toSet().difference(resource.data.memberIds.toSet()) == [request.resource.data.lastAddedId].toSet()
+        && resource.data.memberIds.toSet().difference(request.resource.data.memberIds.toSet()).size() == 0
+        && get(/databases/$(database)/documents/ideas/$(id)/requests/$(request.resource.data.lastAddedId)).data.status == 'pending'
+        && getAfter(/databases/$(database)/documents/ideas/$(id)/requests/$(request.resource.data.lastAddedId)).data.status == 'accepted';
+      allow delete: if false;
+      match /messages/{mid} {
+        allow get: if member(id);
+        allow list: if member(id) && bounded(50);
+        allow create: if member(id) && named(request.resource.data)
+          && request.resource.data.keys().hasOnly(['authorId', 'authorName', 'text', 'createdAt'])
+          && request.resource.data.text is string && request.resource.data.text.size() >= 1 && request.resource.data.text.size() <= 800
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}

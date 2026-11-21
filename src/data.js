@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, onAuthStateChanged, signInAnonymously, connectAuthEmulator } from 'firebase/auth';
+import { getAuth, onAuthStateChanged, signInAnonymously, connectAuthEmulator, GoogleAuthProvider, linkWithPopup, signInWithPopup, signOut } from 'firebase/auth';
 import {
   getFirestore, connectFirestoreEmulator, collection, doc, getDoc, getDocs,
   setDoc, query, where, orderBy, limit, startAfter, onSnapshot,
@@ -24,6 +24,27 @@ export async function connectStore() {
 
 export const row = snapshot => ({ id: snapshot.id, ...snapshot.data() });
 export const watchUser = (store, callback) => onAuthStateChanged(store.auth, callback);
+export function continueWithGoogle(store, switchAccount = false) {
+  const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: 'select_account' });
+  store.auth.languageCode = 'ko';
+  // Linking preserves the anonymous UID, including all posts, room membership and pin rights.
+  if (store.auth.currentUser?.isAnonymous && !switchAccount) return linkWithPopup(store.auth.currentUser, provider);
+  return signInWithPopup(store.auth, provider);
+}
+export function leaveAccount(store) {
+  if (store.auth.currentUser?.isAnonymous) throw new Error('현재 기록을 이어 쓰려면 먼저 Google 계정을 연결해주세요.');
+  return signOut(store.auth);
+}
+export const watchModerator = (store, uid, callback, failure) => onSnapshot(
+  doc(store.db, 'moderators', uid), snap => callback(snap.exists() && snap.data().canPin === true), failure,
+);
+export const watchCommunity = (store, callback, failure) => onSnapshot(
+  doc(store.db, 'settings', 'community'), snap => callback(snap.data()?.pinnedIdeaId || ''), failure,
+);
+export const pinIdea = (store, id) => setDoc(doc(store.db, 'settings', 'community'), {
+  pinnedIdeaId: id, updatedAt: serverTimestamp(),
+});
 export async function getProfile(store, uid) {
   const snapshot = await getDoc(doc(store.db, 'profiles', uid));
   return snapshot.exists() ? row(snapshot) : null;
@@ -108,7 +129,8 @@ export async function toggleInterest(store, uid, id) {
 }
 export const watchRooms = (store, uid, callback, failure) => onSnapshot(
   query(collection(store.db, 'rooms'), where('memberIds', 'array-contains', uid), limit(20)),
-  snapshot => callback(snapshot.docs.map(row)), failure,
+  { includeMetadataChanges: true },
+  snapshot => { if (!snapshot.metadata.hasPendingWrites) callback(snapshot.docs.map(row)); }, failure,
 );
 export const watchRequests = (store, id, callback, failure) => onSnapshot(
   query(collection(store.db, 'ideas', id, 'requests'), where('status', '==', 'pending'), limit(20)),

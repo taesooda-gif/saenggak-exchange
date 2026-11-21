@@ -17,7 +17,7 @@
       <button data-view="contribute" aria-pressed="false">보태기</button>
       <button data-view="chat" aria-pressed="false">함께하기</button>
     </nav>
-    <button class="sg-button sg-profile" id="profile-button">닉네임으로 시작</button>
+    <button class="sg-button sg-profile" id="profile-button">시작하기 · 로그인</button>
   </header>
   <main class="sg-body">
     <p id="connection-status" class="sg-connection" role="status">생각들을 불러오고 있어요.</p>
@@ -72,7 +72,26 @@
     <p class="sg-status" id="status" role="status" aria-live="polite"></p>
   </main>
   <footer class="sg-footer"><span>생각 거래소</span><span>작은 생각이 함께할 사람을 만나는 곳.</span></footer>
-  <dialog id="nickname-dialog" aria-labelledby="nickname-title"><form id="nickname-form"><h2 id="nickname-title">어떤 이름으로 함께할까요?</h2><p>글은 누구나 읽을 수 있어요.<br>참여할 때는 닉네임을 하나 정해주세요.</p><label for="nickname">닉네임</label><input id="nickname" minlength="2" maxlength="20" placeholder="2~20자로 적어주세요" autocomplete="nickname" required><p class="sg-caption">참여 기록은 이 브라우저에 연결돼요. 다른 기기에서는 별도의 참여자로 시작하며, 브라우저 데이터를 지우면 기존 기록의 주인으로 돌아갈 수 없어요.</p><p id="nickname-error" class="sg-error" role="alert"></p><div class="sg-actions"><button id="nickname-cancel" class="sg-button" type="button">나중에</button><button class="sg-button sg-primary" type="submit">함께 시작하기</button></div></form></dialog>
+  <dialog id="nickname-dialog" aria-labelledby="nickname-title">
+    <form id="nickname-form">
+      <h2 id="nickname-title">어떤 이름으로 함께할까요?</h2>
+      <p id="nickname-intro">닉네임만 정해도 참여할 수 있어요.<br>Google 연결은 원할 때 선택하세요.</p>
+      <div id="nickname-google-option"><button id="nickname-google" class="sg-button sg-google sg-full" type="button">Google로 로그인</button><p class="sg-caption">이미 연결했다면 같은 Google 계정으로 이어오세요.</p><div class="sg-divider">또는 닉네임으로 가볍게</div></div>
+      <label for="nickname">닉네임</label><input id="nickname" minlength="2" maxlength="20" placeholder="2~20자로 적어주세요" autocomplete="nickname" required>
+      <p id="nickname-hint" class="sg-caption">Google 연결 전에는 이 브라우저에서만 이어 쓸 수 있어요. 나중에 연결해도 지금 남긴 기록은 그대로 이어져요.</p>
+      <p id="nickname-error" class="sg-error" role="alert"></p>
+      <div class="sg-actions"><button id="nickname-cancel" class="sg-button" type="button">나중에</button><button id="nickname-submit" class="sg-button sg-primary" type="submit">닉네임으로 시작</button></div>
+    </form>
+  </dialog>
+  <dialog id="account-dialog" aria-labelledby="account-title">
+    <h2 id="account-title">내 참여 계정</h2><p id="account-description"></p>
+    <p id="account-email" class="sg-caption"></p><p id="account-permission" class="sg-caption" hidden>글을 상단에 고정하거나 해제할 수 있어요.</p>
+    <button id="account-google" class="sg-button sg-google sg-full" type="button">Google 계정 연결</button>
+    <p id="account-privacy" class="sg-caption">공개되는 이름은 지금 닉네임 그대로예요. Google 이메일은 다른 사람에게 보이지 않아요.</p>
+    <p id="account-error" class="sg-error" role="alert"></p>
+    <div id="account-switch" hidden><p class="sg-caption">기존 Google 계정으로 전환하면 현재 닉네임의 기록은 합쳐지지 않아요. 연결하지 않은 현재 계정으로는 돌아오지 못할 수 있어요.</p><button id="account-switch-button" class="sg-button" type="button">기존 Google 계정으로 전환</button></div>
+    <div class="sg-actions"><button id="account-close" class="sg-button" type="button">닫기</button><button id="account-logout" class="sg-button" type="button" hidden>로그아웃</button></div>
+  </dialog>
 </div>
 <script type="module" src="/src/main.js"></script>
 </body>

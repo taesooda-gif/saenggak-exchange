@@ -148,6 +148,10 @@ body { margin:0; background:light-dark(#fff,#17181b); }
 #sg-community .sg-discussion-privacy { color:var(--sg-soft); font-size:12px; }
 #sg-community .sg-discussion-button { flex-shrink:0; color:var(--sg-accent-ink); background:var(--sg-paper); }
 #sg-community #detail-together { margin-bottom:28px; }
+#sg-community .sg-pinned { border-top:2px solid var(--sg-accent-ink); }
+#sg-community .sg-pin-label { color:var(--sg-accent-ink); font-weight:700; }
+#sg-community .sg-pin-label::before { content:'↟'; margin-right:5px; }
+#sg-community .sg-pin-action { margin-left:auto; color:var(--sg-soft); }
 #sg-community .sg-room-context { margin-top:20px; padding:16px 18px; background:var(--sg-bg); border-radius:var(--sg-radius); }
 #sg-community .sg-room-context strong { font-size:15px; }
 #sg-community .sg-room-context p { margin-top:8px; font-size:14px; color:var(--sg-soft); }
@@ -156,3 +160,10 @@ body { margin:0; background:light-dark(#fff,#17181b); }
 @media(max-width:620px) { #sg-community .sg-discussion { align-items:flex-start; flex-direction:column; gap:12px; padding:15px; } }
 @media(max-width:900px) { #sg-community .sg-brand { width:auto; padding-right:0; } #sg-community .sg-nav { order:3; flex-basis:100%; } #sg-community .sg-header { gap:12px; } }
 @media(max-width:620px) { #sg-community .sg-profile { font-size:12px; padding:7px; max-width:122px; } #sg-community .sg-chat-list { border-bottom:1px solid var(--sg-line); } #sg-community .sg-actions .sg-button { font-size:13px; } }
+
+#sg-community .sg-google { display:block; color:var(--sg-text); background:var(--sg-paper); border:1px solid var(--sg-line); min-height:46px; font-weight:600; }
+#sg-community .sg-google:hover { background:var(--sg-bg); }
+#sg-community .sg-divider { display:flex; align-items:center; gap:12px; margin:20px 0; color:var(--sg-soft); font-size:12px; }
+#sg-community .sg-divider::before, #sg-community .sg-divider::after { content:''; height:1px; flex:1; background:var(--sg-line); }
+#sg-community #account-email { overflow-wrap:anywhere; }
+#sg-community #account-dialog > .sg-actions { margin-top:24px; justify-content:space-between; }

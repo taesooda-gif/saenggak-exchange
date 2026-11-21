@@ -9,9 +9,22 @@ let view = 'home', selectedId = '', kind = '경험', feedRows = [], extraRows = 
 let cursor, hasMore = false, recentComments = [], previousComments = [], recentMessages = [], previousMessages = [];
 let stopFeed, stopRooms, stopIdea, stopComments, stopMessages, stopRequests;
 let identityReady = Promise.resolve(), guestResolve, guestPromise;
+let identityVersion = 0, activeUid = '', authBusy = false;
 const interestState = new Map(), activityCache = new Map();
 const syncedDiscussions = new Map();
 let requestVersion = 0;
+let canPin = false, pinnedId = '', pinnedIdea = null, stopPinnedIdea, stopModerator;
+
+function refreshPinViews() { renderFeed(); if (view === 'detail') renderDetail(); }
+function watchPinnedIdea(id) {
+  if (id === pinnedId) return;
+  stopPinnedIdea?.(); stopPinnedIdea = undefined;
+  pinnedId = id; pinnedIdea = null; refreshPinViews();
+  if (id) stopPinnedIdea = api.watchIdea(store, id, idea => {
+    if (pinnedId !== id) return;
+    pinnedIdea = idea; refreshPinViews();
+  }, error => showStatus(errorText(error), true));
+}
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -80,6 +93,7 @@ async function person() {
   if (!guestPromise) {
     guestPromise = new Promise(resolve => { guestResolve = resolve; });
     $('#nickname-error').textContent = '';
+    renderAccount();
     $('#nickname-dialog').showModal();
     $('#nickname').focus();
   }
@@ -90,24 +104,106 @@ function resolveGuest(value) {
   guestResolve = undefined; guestPromise = undefined;
   $('#nickname-dialog').close(); resolve?.(value);
 }
-$('#nickname-dialog').addEventListener('cancel', event => { event.preventDefault(); resolveGuest(null); });
-$('#nickname-cancel').addEventListener('click', () => resolveGuest(null));
+$('#nickname-dialog').addEventListener('cancel', event => { event.preventDefault(); if (!authBusy) resolveGuest(null); });
+$('#nickname-cancel').addEventListener('click', () => { if (!authBusy) resolveGuest(null); });
 $('#nickname-form').addEventListener('submit', event => {
   event.preventDefault();
+  if (authBusy) return;
   run(event.submitter, async () => {
     const name = $('#nickname').value.trim();
     if (name.length < 2) { $('#nickname-error').textContent = '닉네임을 2자 이상 적어주세요.'; return; }
     try {
       const joined = await api.joinAsGuest(store, name);
-      user = joined.user; profile = joined.profile; identityChanged();
-      resolveGuest({ uid: user.uid, name: profile.displayName });
+      await setIdentity(joined.user);
+      if (user && profile) resolveGuest({ uid: user.uid, name: profile.displayName });
     } catch (error) { $('#nickname-error').textContent = errorText(error); }
   });
 });
+function renderAccount() {
+  const linked = user && !user.isAnonymous;
+  $('#nickname-google-option').hidden = Boolean(linked);
+  $('#nickname-intro').textContent = linked ? '로그인했어요. 다른 사람에게 보여줄 닉네임을 정해주세요.' : '닉네임만 정해도 참여할 수 있어요. Google 연결은 원할 때 선택하세요.';
+  $('#nickname-hint').textContent = linked ? 'Google 실명과 이메일 대신 이 닉네임이 공개돼요.' : 'Google 연결 전에는 이 브라우저에서만 이어 쓸 수 있어요. 나중에 연결해도 지금 남긴 기록은 그대로 이어져요.';
+  $('#nickname-submit').textContent = linked ? '이 닉네임으로 참여' : '닉네임으로 시작';
+  $('#account-title').textContent = profile ? `${profile.displayName}님의 참여 계정` : '내 참여 계정';
+  $('#account-description').textContent = linked ? 'Google 계정이 연결되어 있어요. 다른 기기에서도 같은 Google 계정으로 로그인하면 이어 쓸 수 있어요.' : '지금은 이 브라우저에서 닉네임으로 참여하고 있어요. 원할 때 Google 계정을 연결하면 글과 대화방을 다른 기기에서도 이어 쓸 수 있어요.';
+  $('#account-email').textContent = linked ? `연결한 계정: ${user.email || 'Google'}` : '연결은 선택이에요. 연결하지 않아도 계속 참여할 수 있어요.';
+  $('#account-google').hidden = Boolean(linked);
+  $('#account-logout').hidden = !linked;
+  $('#account-permission').hidden = !canPin;
+}
 $('#profile-button').addEventListener('click', () => run($('#profile-button'), async () => {
-  if (profile) showStatus(`${profile.displayName}님으로 참여하고 있어요. 참여 기록은 이 브라우저에 연결돼요.`);
-  else await person();
+  await identityReady;
+  if (profile) {
+    renderAccount(); $('#account-error').textContent = ''; $('#account-switch').hidden = true;
+    $('#account-dialog').showModal();
+  } else await person();
 }));
+$('#account-close').addEventListener('click', () => { if (!authBusy) $('#account-dialog').close(); });
+$('#account-dialog').addEventListener('cancel', event => { if (authBusy) event.preventDefault(); });
+function googleError(error) {
+  if (error.code === 'auth/popup-closed-by-user' || error.code === 'auth/cancelled-popup-request') return '로그인을 취소했어요. 지금처럼 계속 이용하셔도 돼요.';
+  if (error.code === 'auth/popup-blocked') return '로그인 창이 차단됐어요. 팝업을 허용하고 다시 눌러주세요. 앱 안에서 열었다면 Safari나 Chrome에서 접속해주세요.';
+  if (error.code === 'auth/unauthorized-domain') return '이 주소의 Google 로그인을 준비 중이에요. 닉네임으로는 계속 참여할 수 있어요.';
+  if (error.code === 'auth/credential-already-in-use' || error.code === 'auth/email-already-in-use') return '이 Google 계정은 이미 다른 참여 계정에 연결되어 있어요. 현재 계정과 기록은 그대로 두었어요.';
+  return errorText(error);
+}
+async function googleLogin(switchAccount = false) {
+  if (authBusy || !store) return;
+  authBusy = true;
+  const controls = ['#nickname-google', '#nickname-submit', '#nickname-cancel', '#account-google', '#account-switch-button', '#account-close', '#account-logout'];
+  controls.forEach(id => $(id).disabled = true);
+  $('#nickname-error').textContent = $('#account-error').textContent = '';
+  $('#account-switch').hidden = true;
+  try {
+    // Start the popup directly in the click handler, before any async work.
+    const result = await api.continueWithGoogle(store, switchAccount);
+    await setIdentity(result.user);
+    if (profile) {
+      if (guestPromise) resolveGuest({ uid: user.uid, name: profile.displayName });
+      renderAccount();
+      showStatus('Google 계정으로 이어졌어요. 다른 기기에서도 같은 계정으로 로그인해주세요.');
+    } else {
+      $('#account-dialog').close();
+      if (!guestPromise) void person();
+      renderAccount();
+    }
+  } catch (error) {
+    const message = googleError(error);
+    $('#nickname-error').textContent = $('#account-error').textContent = message;
+    if (['auth/credential-already-in-use', 'auth/email-already-in-use'].includes(error.code) && profile && !canPin) $('#account-switch').hidden = false;
+  } finally { authBusy = false; controls.forEach(id => $(id).disabled = false); }
+}
+$('#nickname-google').addEventListener('click', () => googleLogin());
+$('#account-google').addEventListener('click', () => googleLogin());
+$('#account-switch-button').addEventListener('click', () => {
+  if (window.confirm('현재 닉네임으로 남긴 기록은 합쳐지지 않으며, 이 계정으로 돌아오지 못할 수 있어요. 기존 Google 계정으로 전환할까요?')) void googleLogin(true);
+});
+$('#account-logout').addEventListener('click', () => run($('#account-logout'), async () => {
+  if (authBusy) return;
+  await api.leaveAccount(store); await setIdentity(null); $('#account-dialog').close();
+  showStatus('로그아웃했어요. 같은 Google 계정으로 다시 이어올 수 있어요.');
+}));
+
+async function setIdentity(next) {
+  const version = ++identityVersion;
+  user = next; profile = null;
+  if (activeUid !== (next?.uid || '')) {
+    activeUid = next?.uid || '';
+    stopRooms?.(); stopRooms = undefined; stopModerator?.(); stopModerator = undefined;
+    stopRequests?.(); stopRequests = undefined; requestVersion++;
+    stopChat(); rooms = []; selectedRoom = null; recentMessages = []; previousMessages = [];
+    interestState.clear(); syncedDiscussions.clear(); canPin = false;
+    $('#messages').replaceChildren(); $('#room-list').replaceChildren(); $('#home-rooms').replaceChildren();
+    $('#room-title').textContent = $('#room-members').textContent = $('#room-context').textContent = '';
+    $('#message-input').value = ''; $('#request-list').replaceChildren(); $('#join-requests').hidden = true;
+    $('#chat-content').hidden = true;
+    renderRooms(); refreshPinViews();
+  }
+  const nextProfile = next ? await api.getProfile(store, next.uid) : null;
+  if (version !== identityVersion) return;
+  profile = nextProfile; identityChanged(); renderAccount();
+}
 
 function startFeed() {
   if (!store || stopFeed || document.hidden) return;
@@ -122,8 +218,10 @@ function renderFeed() {
   const ideas = feedIdeas();
   for (const [selector, compact] of [['#feed', false], ['#contribute-list', true]]) {
     const list = $(selector); list.replaceChildren();
-    if (!ideas.length) list.append(empty('첫 생각을 기다리고 있어요.', '아직 글이 없어요. 떠오른 생각을 한 줄 남겨주세요.', true));
-    ideas.forEach(idea => list.append(ideaCard(idea, compact)));
+    const pinned = compact ? null : pinnedIdea || ideas.find(idea => idea.id === pinnedId);
+    if (pinned) list.append(ideaCard(pinned, false));
+    if (!ideas.length && !pinned) list.append(empty('첫 생각을 기다리고 있어요.', '아직 글이 없어요. 떠오른 생각을 한 줄 남겨주세요.', true));
+    ideas.filter(idea => idea.id !== pinned?.id).forEach(idea => list.append(ideaCard(idea, compact)));
   }
   $('#more-ideas').hidden = $('#more-contribute').hidden = !hasMore;
 }
@@ -149,6 +247,11 @@ function actionsFor(idea, compact = false) {
     interest.setAttribute('aria-pressed', String(interested)); actions.append(interest);
   }
   actions.append(button(`보태기 ${idea.contributionCount}`, () => openIdea(idea.id)));
+  if (canPin) actions.append(button(idea.id === pinnedId ? '고정 해제' : '상단 고정', async () => {
+    const clear = idea.id === pinnedId;
+    await api.pinIdea(store, clear ? '' : idea.id);
+    showStatus(clear ? '상단 고정을 해제했어요.' : '둘러보기 맨 위에 고정했어요. 고정 글은 하나만 표시돼요.');
+  }, 'sg-button sg-pin-action'));
   return actions;
 }
 function discussionCard(idea) {
@@ -167,8 +270,9 @@ function discussionCard(idea) {
   return group;
 }
 function ideaCard(idea, compact) {
-  const card = el('article', 'sg-card');
+  const card = el('article', `sg-card${idea.id === pinnedId ? ' sg-pinned' : ''}`);
   const meta = el('div', 'sg-meta'); meta.append(el('span', 'sg-tag', idea.topic), el('span', '', idea.authorName), el('span', '', when(idea.createdAt)));
+  if (idea.id === pinnedId) meta.prepend(el('span', 'sg-pin-label', '상단 고정'));
   const body = el('div', compact ? '' : 'sg-card-body'); const copy = el('div'); const heading = el('h2');
   heading.append(button(idea.title, () => openIdea(idea.id), 'sg-title-link'));
   copy.append(heading, el('p', 'sg-copy', idea.body)); body.append(copy);
@@ -222,9 +326,13 @@ async function openIdea(id, updateHash = true) {
   if (updateHash) history.replaceState(null, '', `#idea/${encodeURIComponent(id)}`);
   stopIdea = api.watchIdea(store, id, idea => {
     currentIdea = idea;
+    $('#connection-status').hidden = true;
     if (!idea) { $('#detail-title').textContent = '생각을 찾을 수 없어요.'; $('#comment-form').hidden = true; return; }
     $('#comment-form').hidden = false; renderDetail();
-    if (user && !interestState.has(id)) api.readInterest(store, user.uid, id).then(active => { interestState.set(id, active); if (currentIdea?.id === id) renderDetail(); }).catch(error => showStatus(errorText(error), true));
+    if (user && !interestState.has(id)) {
+      const uid = user.uid;
+      api.readInterest(store, uid, id).then(active => { if (user?.uid !== uid) return; interestState.set(id, active); if (currentIdea?.id === id) renderDetail(); }).catch(error => { if (user?.uid === uid) showStatus(errorText(error), true); });
+    }
     watchOwnerRequests();
   }, error => showStatus(errorText(error), true));
   stopComments = api.watchContributions(store, id, (rows, more) => { recentComments = rows; $('#older-comments').hidden = !more || Boolean(previousComments.length && previousComments.length % 50); renderComments(); }, error => showStatus(errorText(error), true));
@@ -234,6 +342,7 @@ function renderDetail() {
   const idea = currentIdea;
   $('#detail-title').textContent = idea.title; $('#detail-body').textContent = idea.body;
   $('#detail-meta').replaceChildren(el('span', 'sg-tag', idea.topic), el('span', '', `${idea.authorName} · ${when(idea.createdAt)}`));
+  if (idea.id === pinnedId) $('#detail-meta').prepend(el('span', 'sg-pin-label', '상단 고정'));
   $('#detail-actions').replaceChildren(...actionsFor(idea).children);
   $('#detail-together').replaceChildren(discussionCard(idea));
   $('#comment-count').textContent = `${idea.contributionCount}개`;
@@ -276,7 +385,9 @@ $('#comment-form').addEventListener('submit', event => {
 
 function watchOwnerRequests() {
   if (stopRequests || !currentIdea || user?.uid !== currentIdea.authorId) return;
-  stopRequests = api.watchRequests(store, currentIdea.id, requests => {
+  const uid = user.uid, id = currentIdea.id, version = requestVersion;
+  stopRequests = api.watchRequests(store, id, requests => {
+    if (user?.uid !== uid || currentIdea?.id !== id || version !== requestVersion) return;
     $('#join-requests').hidden = requests.length === 0; const list = $('#request-list'); list.replaceChildren();
     requests.forEach(request => {
       const item = el('div', 'sg-request'); item.append(el('span', '', `${request.authorName}님이 함께하고 싶어 해요.`));
@@ -326,7 +437,8 @@ function selectRoom(id) {
   $('#room-title').textContent = room.title; $('#room-members').textContent = `${room.memberIds.length}명 · 초대받은 사람끼리 나누는 대화`;
   renderRoomContext(room);
   $('#message-input').value = '';
-  stopMessages = api.watchMessages(store, id, (rows, more) => { recentMessages = rows; $('#older-messages').hidden = !more; renderMessages(); }, error => showStatus(errorText(error), true));
+  const uid = user?.uid;
+  stopMessages = api.watchMessages(store, id, (rows, more) => { if (user?.uid !== uid || selectedRoom?.id !== id) return; recentMessages = rows; $('#older-messages').hidden = !more; renderMessages(); }, error => showStatus(errorText(error), true));
 }
 function renderRoomContext(room) {
   const context = $('#room-context'); context.replaceChildren();
@@ -343,7 +455,8 @@ function renderMessages() {
 }
 $('#older-messages').addEventListener('click', () => run($('#older-messages'), async () => {
   const oldest = merged(previousMessages, recentMessages)[0]; if (!oldest || !selectedRoom) return;
-  const rows = await api.olderMessages(store, selectedRoom.id, oldest); previousMessages = [...rows, ...previousMessages]; $('#older-messages').hidden = rows.length < 50; renderMessages();
+  const uid = user?.uid, roomId = selectedRoom.id;
+  const rows = await api.olderMessages(store, roomId, oldest); if (user?.uid !== uid || selectedRoom?.id !== roomId) return; previousMessages = [...rows, ...previousMessages]; $('#older-messages').hidden = rows.length < 50; renderMessages();
 }));
 $('#chat-form').addEventListener('submit', event => {
   event.preventDefault();
@@ -354,12 +467,24 @@ $('#chat-form').addEventListener('submit', event => {
   });
 });
 function identityChanged() {
-  $('#profile-button').textContent = profile ? `${profile.displayName}님` : '닉네임으로 시작';
+  $('#profile-button').textContent = profile ? `${profile.displayName}님` : '시작하기 · 로그인';
+  stopModerator?.(); stopModerator = undefined; canPin = false;
+  if (user && profile) {
+    const uid = user.uid;
+    stopModerator = api.watchModerator(store, uid, allowed => {
+      if (user?.uid !== uid) return;
+      canPin = allowed; refreshPinViews(); renderAccount();
+    }, error => { canPin = false; refreshPinViews(); console.error(error); });
+  }
+  refreshPinViews();
   stopRooms?.(); stopRooms = undefined; rooms = [];
-  if (user && profile) stopRooms = api.watchRooms(store, user.uid, rows => {
+  const uid = user?.uid;
+  if (user && profile) stopRooms = api.watchRooms(store, uid, rows => {
+    if (user?.uid !== uid) return;
+    if (view === 'chat') $('#connection-status').hidden = true;
     rooms = rows; renderRooms(); renderFeed(); if (view === 'detail') renderDetail();
     rows.forEach(room => {
-      const key = `${user.uid}:${room.id}`;
+      const key = `${uid}:${room.id}`;
       if (syncedDiscussions.get(key) === room.memberIds.length) return;
       syncedDiscussions.set(key, room.memberIds.length);
       api.refreshDiscussion(store, room.id).catch(error => { syncedDiscussions.delete(key); console.error(error); showStatus('대화는 사용할 수 있지만, 둘러보기의 참여 표시를 갱신하지 못했어요. 잠시 후 새로고침해주세요.', true); });
@@ -382,13 +507,12 @@ try {
     $('#connection-status').textContent = '저장소 연결을 준비하고 있어요. 잠시 후 다시 찾아주세요.';
     renderFeed(); renderRooms();
   } else {
+    api.watchCommunity(store, watchPinnedIdea, error => showStatus('고정 글을 불러오지 못했어요. 잠시 후 새로고침해주세요.', true));
     let ready;
     identityReady = new Promise(resolve => { ready = resolve; });
-    api.watchUser(store, async next => {
-      user = next;
-      try { profile = next ? await api.getProfile(store, next.uid) : null; identityChanged(); }
-      catch (error) { showStatus(errorText(error), true); }
-      finally { ready(); }
+    api.watchUser(store, next => {
+      identityReady = setIdentity(next).catch(error => showStatus(errorText(error), true));
+      identityReady.finally(ready);
     });
     route();
   }

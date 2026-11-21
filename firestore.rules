@@ -7,11 +7,31 @@ service cloud.firestore {
     function roomPath(id) { return /databases/$(database)/documents/rooms/$(id); }
     function owner(id) { return signedIn() && get(ideaPath(id)).data.authorId == request.auth.uid; }
     function member(id) { return signedIn() && request.auth.uid in get(roomPath(id)).data.memberIds; }
+    function canPin() {
+      return signedIn() && get(/databases/$(database)/documents/moderators/$(request.auth.uid)).data.canPin == true;
+    }
     function named(data) {
       return signedIn() && data.authorId == request.auth.uid
         && data.authorName == get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data.displayName;
     }
 
+    // Pin authority is granted in the Firebase console, never by a nickname or client write.
+    match /moderators/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list, write: if false;
+    }
+    match /settings/community {
+      allow get: if true;
+      allow list, delete: if false;
+      allow create, update: if canPin()
+        && request.resource.data.keys().hasOnly(['pinnedIdeaId', 'updatedAt'])
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.pinnedIdeaId is string
+        && (request.resource.data.pinnedIdeaId == ''
+          || (request.resource.data.pinnedIdeaId.size() <= 128
+            && request.resource.data.pinnedIdeaId.matches('^[A-Za-z0-9_-]+$')
+            && exists(ideaPath(request.resource.data.pinnedIdeaId))));
+    }
     match /profiles/{uid} {
       allow get: if signedIn() && request.auth.uid == uid;
       allow list, delete: if false;

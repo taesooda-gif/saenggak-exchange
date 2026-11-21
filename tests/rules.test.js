@@ -2,7 +2,7 @@ import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
-import { collection, doc, getDoc, getDocs, setDoc, updateDoc, query, where, limit, serverTimestamp, deleteField, Timestamp } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, query, where, limit, serverTimestamp, deleteField, Timestamp } from 'firebase/firestore';
 import * as api from '../src/data.js';
 
 let env, alice, bob, eve, visitor, id;
@@ -110,4 +110,42 @@ test('기존 대화는 참여자가 접속하면 실제 기록에서 공개 활�
   assert.equal(repaired.participantCount, 1);
   assert.equal(repaired.lastChatMessageId, original.lastChatMessageId);
   assert.equal(repaired.lastChatAt.toMillis(), original.lastChatAt.toMillis());
+});
+
+test('지정된 운영자만 글을 고정·교체·해제하며 닉네임 사칭이나 권한 자체 생성은 거부한다', async () => {
+  await env.withSecurityRulesDisabled(context => setDoc(doc(context.firestore(), 'moderators', 'alice'), { canPin: true }));
+  await updateDoc(doc(bob.db, 'profiles', 'bob'), { displayName: personA.name });
+  await assertFails(api.pinIdea(visitor, id));
+  await assertFails(api.pinIdea(bob, id));
+  await assertFails(setDoc(doc(bob.db, 'moderators', 'bob'), { canPin: true }));
+  await assertFails(setDoc(doc(alice.db, 'moderators', 'bob'), { canPin: true }));
+  await assertFails(updateDoc(doc(alice.db, 'profiles', 'alice'), { canPin: true }));
+  await assertSucceeds(api.pinIdea(alice, id));
+  const setting = doc(visitor.db, 'settings', 'community');
+  assert.equal((await getDoc(setting)).data().pinnedIdeaId, id);
+  const second = await api.createIdea(eve, { uid: 'eve', name: '방문자' }, { title: '다음 공지', body: '', topic: '생활 속 생각' });
+  await assertSucceeds(api.pinIdea(alice, second));
+  assert.equal((await getDoc(setting)).data().pinnedIdeaId, second);
+  // Pin authority grants no access to someone else's private chat or posts.
+  await assertFails(getDoc(doc(alice.db, 'rooms', second)));
+  await assertFails(updateDoc(doc(alice.db, 'ideas', second), { body: '변경' }));
+  await assertFails(api.pinIdea(bob, ''));
+  await assertSucceeds(api.pinIdea(alice, ''));
+  assert.equal((await getDoc(setting)).data().pinnedIdeaId, '');
+});
+
+test('고정 설정은 존재하는 글만 허용하고 권한 정보와 다른 설정을 보호한다', async () => {
+  await env.withSecurityRulesDisabled(context => setDoc(doc(context.firestore(), 'moderators', 'alice'), { canPin: true }));
+  await assertSucceeds(getDoc(doc(alice.db, 'moderators', 'alice')));
+  await assertFails(getDoc(doc(bob.db, 'moderators', 'alice')));
+  await assertFails(getDocs(query(collection(alice.db, 'moderators'), limit(20))));
+  await assertFails(api.pinIdea(alice, 'missing'));
+  await assertFails(api.pinIdea(alice, 'rooms/private'));
+  await assertFails(setDoc(doc(alice.db, 'settings', 'community'), { pinnedIdeaId: id, updatedAt: serverTimestamp(), admin: true }));
+  await assertFails(setDoc(doc(alice.db, 'settings', 'community'), { pinnedIdeaId: id, updatedAt: Timestamp.fromMillis(0) }));
+  await assertSucceeds(api.pinIdea(alice, id));
+  await assertFails(deleteDoc(doc(alice.db, 'settings', 'community')));
+  await assertFails(setDoc(doc(alice.db, 'settings', 'other'), { pinnedIdeaId: id }));
+  await env.withSecurityRulesDisabled(context => updateDoc(doc(context.firestore(), 'moderators', 'alice'), { canPin: false }));
+  await assertFails(api.pinIdea(alice, ''));
 });

@@ -72,6 +72,16 @@
     <p class="sg-status" id="status" role="status" aria-live="polite"></p>
   </main>
   <footer class="sg-footer"><span>생각 거래소</span><span>작은 생각이 함께할 사람을 만나는 곳.</span></footer>
+  <dialog id="edit-idea-dialog" aria-labelledby="edit-idea-heading">
+    <form id="edit-idea-form" class="sg-form">
+      <div><h2 id="edit-idea-heading">내 생각 수정하기</h2><p class="sg-caption">다른 사람이 보탠 내용과 함께하는 대화는 그대로 이어져요.</p></div>
+      <div class="sg-field"><label for="edit-idea-title">생각 한 줄</label><input id="edit-idea-title" maxlength="100" required></div>
+      <div class="sg-field"><label for="edit-idea-topic">어떤 이야기인가요?</label><select id="edit-idea-topic"></select></div>
+      <div class="sg-field"><label for="edit-idea-body">조금 더 들려주세요</label><textarea id="edit-idea-body" maxlength="2000"></textarea></div>
+      <p id="edit-idea-error" class="sg-error" role="alert"></p>
+      <div class="sg-actions"><button id="edit-idea-cancel" class="sg-button" type="button">취소</button><button id="edit-idea-save" class="sg-button sg-primary" type="submit">수정 저장</button></div>
+    </form>
+  </dialog>
   <dialog id="nickname-dialog" aria-labelledby="nickname-title">
     <form id="nickname-form">
       <h2 id="nickname-title">어떤 이름으로 함께할까요?</h2>

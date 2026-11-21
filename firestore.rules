@@ -65,6 +65,16 @@ service cloud.firestore {
         && request.resource.data.get('lastChatAt', null) == null
         && request.resource.data.get('lastChatMessageId', '') == '';
 
+      function contentChange() {
+        let next = request.resource.data;
+        return resource.data.authorId == request.auth.uid
+          && next.diff(resource.data).affectedKeys().hasOnly(['title', 'body', 'topic', 'updatedAt'])
+          && next.title is string && next.title.size() >= 1 && next.title.size() <= 100
+          && next.body is string && next.body.size() <= 2000
+          && next.topic in ['나의 다음 일', '아이의 내일', '생활 속 생각', '엉뚱한 상상']
+          && next.updatedAt == request.time
+          && (next.title == resource.data.title || getAfter(roomPath(id)).data.title == next.title);
+      }
       function interestChange() {
         let path = /databases/$(database)/documents/ideas/$(id)/interests/$(request.auth.uid);
         let event = /databases/$(database)/documents/ideas/$(id)/activities/$('i_' + request.auth.uid);
@@ -106,7 +116,7 @@ service cloud.firestore {
           && next.lastChatAt == message.data.createdAt
           && (resource.data.get('lastChatAt', null) == null || next.lastChatAt >= resource.data.lastChatAt);
       }
-      allow update: if signedIn() && (interestChange() || contributionChange() || participantChange() || discussionChange());
+      allow update: if signedIn() && (contentChange() || interestChange() || contributionChange() || participantChange() || discussionChange());
       allow delete: if false;
 
       match /interests/{uid} {
@@ -176,6 +186,10 @@ service cloud.firestore {
         && request.resource.data.title == getAfter(ideaPath(id)).data.title
         && request.resource.data.memberIds == [request.auth.uid]
         && request.resource.data.createdAt == request.time && request.resource.data.lastAddedId == '';
+      // Renaming a thought also renames its existing room; membership stays unchanged.
+      allow update: if signedIn() && resource.data.ownerId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title'])
+        && getAfter(ideaPath(id)).data.title == request.resource.data.title;
       allow update: if signedIn() && resource.data.ownerId == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberIds', 'lastAddedId'])
         && request.resource.data.memberIds is list && request.resource.data.memberIds.size() <= 20

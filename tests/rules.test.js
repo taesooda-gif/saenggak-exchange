@@ -2,7 +2,7 @@ import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
-import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, query, where, limit, serverTimestamp, deleteField, Timestamp } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, writeBatch, query, where, limit, serverTimestamp, deleteField, Timestamp } from 'firebase/firestore';
 import * as api from '../src/data.js';
 
 let env, alice, bob, eve, visitor, id;
@@ -148,4 +148,65 @@ test('고정 설정은 존재하는 글만 허용하고 권한 정보와 다른 
   await assertFails(setDoc(doc(alice.db, 'settings', 'other'), { pinnedIdeaId: id }));
   await env.withSecurityRulesDisabled(context => updateDoc(doc(context.firestore(), 'moderators', 'alice'), { canPin: false }));
   await assertFails(api.pinIdea(alice, ''));
+});
+
+test('작성자는 글과 방 제목을 함께 수정하며 보탬·관심·참여자·대화·고정을 유지한다', async () => {
+  await env.withSecurityRulesDisabled(context => setDoc(doc(context.firestore(), 'moderators', 'alice'), { canPin: true }));
+  await api.pinIdea(alice, id);
+  await api.addContribution(bob, personB, id, { kind: '제안', text: '함께 남긴 보탬' });
+  await api.toggleInterest(bob, 'bob', id);
+  await api.requestToJoin(bob, personB, id); await api.decideRequest(alice, id, 'bob', true);
+  await api.sendMessage(bob, personB, id, '함께 남긴 대화');
+  const ref = doc(alice.db, 'ideas', id), original = api.row(await getDoc(ref));
+  const roomBefore = (await getDoc(doc(alice.db, 'rooms', id))).data();
+  const activityBefore = await api.loadActivity(visitor, id);
+  const updated = await assertSucceeds(api.updateIdea(alice, 'alice', original, { title: '수정한 생각', body: '추가한 설명', topic: '생활 속 생각' }));
+  assert.equal(updated.title, '수정한 생각'); assert.equal(updated.body, '추가한 설명'); assert.equal(updated.topic, '생활 속 생각');
+  assert.ok(updated.updatedAt.toMillis() > 0);
+  for (const key of ['authorId', 'authorName', 'createdAt', 'lastActivityAt', 'interestCount', 'contributionCount', 'lastContributionId', 'participantCount', 'lastChatAt', 'lastChatMessageId']) assert.deepEqual(updated[key], original[key], key);
+  const roomAfter = (await getDoc(doc(bob.db, 'rooms', id))).data();
+  assert.deepEqual(roomAfter, { ...roomBefore, title: updated.title });
+  assert.deepEqual(await api.loadActivity(visitor, id), activityBefore);
+  assert.equal((await getDoc(doc(visitor.db, 'settings', 'community'))).data().pinnedIdeaId, id);
+  assert.equal((await getDoc(doc(visitor.db, 'ideas', id, 'contributions', original.lastContributionId))).data().text, '함께 남긴 보탬');
+  assert.equal((await getDoc(doc(bob.db, 'rooms', id, 'messages', original.lastChatMessageId))).data().text, '함께 남긴 대화');
+  // Existing social actions continue to work after updatedAt is added.
+  await assertSucceeds(api.addContribution(bob, personB, id, { kind: '경험', text: '수정된 생각에도 보태요' }));
+  await assertSucceeds(api.sendMessage(bob, personB, id, '대화도 이어져요'));
+  await assertSucceeds(api.toggleInterest(bob, 'bob', id));
+});
+
+test('같은 닉네임·참여자·운영자도 남의 글을 수정하거나 수정에 다른 권한 변경을 섞을 수 없다', async () => {
+  const ref = doc(alice.db, 'ideas', id), original = api.row(await getDoc(ref));
+  await updateDoc(doc(bob.db, 'profiles', 'bob'), { displayName: personA.name });
+  await env.withSecurityRulesDisabled(context => setDoc(doc(context.firestore(), 'moderators', 'bob'), { canPin: true }));
+  await api.requestToJoin(bob, { uid: 'bob', name: personA.name }, id); await api.decideRequest(alice, id, 'bob', true);
+  for (const other of [bob, visitor]) {
+    await assertFails(updateDoc(doc(other.db, 'ideas', id), { body: '사칭', updatedAt: serverTimestamp() }));
+    await assertFails(api.updateIdea(other, 'alice', original, { title: original.title, body: '사칭', topic: original.topic }));
+  }
+  for (const extra of [{ authorId: 'bob' }, { authorName: '다른 사람' }, { createdAt: serverTimestamp() }, { lastActivityAt: serverTimestamp() }, { interestCount: 99 }, { participantCount: 99 }, { extra: true }]) {
+    await assertFails(updateDoc(ref, { body: '수정', updatedAt: serverTimestamp(), ...extra }));
+  }
+  const batch = writeBatch(alice.db);
+  batch.update(ref, { title: '새 제목', updatedAt: serverTimestamp() });
+  batch.update(doc(alice.db, 'rooms', id), { title: '새 제목', memberIds: ['alice'] });
+  await assertFails(batch.commit());
+  await assertFails(updateDoc(doc(bob.db, 'rooms', id), { title: original.title }));
+});
+
+test('수정 값·시각·방 제목 동기화를 검증하고 오래된 편집으로 새 내용을 덮어쓰지 않는다', async () => {
+  const ref = doc(alice.db, 'ideas', id), original = api.row(await getDoc(ref));
+  for (const invalid of [{ title: '' }, { title: '가'.repeat(101) }, { body: '가'.repeat(2001) }, { body: 123 }, { topic: '없는 분류' }, { updatedAt: Timestamp.fromMillis(0) }]) {
+    await assertFails(updateDoc(ref, { body: '수정', updatedAt: serverTimestamp(), ...invalid }));
+  }
+  await assertFails(updateDoc(ref, { body: '시각 없는 수정' }));
+  await assertFails(updateDoc(ref, { title: '방과 다른 제목', updatedAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(alice.db, 'rooms', id), { title: '원문과 다른 제목' }));
+  const changes = { title: original.title, body: '먼저 저장한 내용', topic: original.topic };
+  const first = await assertSucceeds(api.updateIdea(alice, 'alice', original, changes));
+  await assert.rejects(api.updateIdea(alice, 'alice', original, { ...changes, body: '오래된 편집 내용' }), /먼저 수정된 글/);
+  assert.equal((await getDoc(ref)).data().body, changes.body);
+  const same = await api.updateIdea(alice, 'alice', first, changes);
+  assert.equal(same.updatedAt.toMillis(), first.updatedAt.toMillis());
 });

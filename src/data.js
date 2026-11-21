@@ -93,6 +93,23 @@ export async function createIdea(store, person, { title, body, topic }) {
   await batch.commit();
   return ref.id;
 }
+export async function updateIdea(store, uid, original, { title, body, topic }) {
+  const ref = doc(store.db, 'ideas', original.id);
+  await runTransaction(store.db, async transaction => {
+    const snapshot = await transaction.get(ref);
+    if (!snapshot.exists()) throw new Error('생각을 찾을 수 없어요.');
+    const current = snapshot.data();
+    if (current.authorId !== uid) throw new Error('내가 올린 생각만 수정할 수 있어요.');
+    if (['title', 'body', 'topic'].some(key => current[key] !== original[key])
+      || (current.updatedAt?.toMillis() || 0) !== (original.updatedAt?.toMillis() || 0)) {
+      throw new Error('다른 화면에서 먼저 수정된 글이에요. 입력한 내용을 복사한 뒤, 닫고 최신 글에서 다시 수정해주세요.');
+    }
+    if (current.title === title && current.body === body && current.topic === topic) return;
+    transaction.update(ref, { title, body, topic, updatedAt: serverTimestamp() });
+    if (current.title !== title) transaction.update(doc(store.db, 'rooms', original.id), { title });
+  });
+  return row(await getDoc(ref));
+}
 export async function addContribution(store, person, id, { kind, text }) {
   const parent = doc(store.db, 'ideas', id);
   const ref = doc(collection(parent, 'contributions'));

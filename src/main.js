@@ -10,6 +10,7 @@ let cursor, hasMore = false, recentComments = [], previousComments = [], recentM
 let stopFeed, stopRooms, stopIdea, stopComments, stopMessages, stopRequests;
 let identityReady = Promise.resolve(), guestResolve, guestPromise;
 let identityVersion = 0, activeUid = '', authBusy = false;
+let editingIdea = null, editBusy = false;
 const interestState = new Map(), activityCache = new Map();
 const syncedDiscussions = new Map();
 let requestVersion = 0;
@@ -189,6 +190,7 @@ async function setIdentity(next) {
   const version = ++identityVersion;
   user = next; profile = null;
   if (activeUid !== (next?.uid || '')) {
+    closeIdeaEditor(true);
     activeUid = next?.uid || '';
     stopRooms?.(); stopRooms = undefined; stopModerator?.(); stopModerator = undefined;
     stopRequests?.(); stopRequests = undefined; requestVersion++;
@@ -247,6 +249,7 @@ function actionsFor(idea, compact = false) {
     interest.setAttribute('aria-pressed', String(interested)); actions.append(interest);
   }
   actions.append(button(`보태기 ${idea.contributionCount}`, () => openIdea(idea.id)));
+  if (profile && user?.uid === idea.authorId) actions.append(button('수정하기', () => openIdeaEditor(idea)));
   if (canPin) actions.append(button(idea.id === pinnedId ? '고정 해제' : '상단 고정', async () => {
     const clear = idea.id === pinnedId;
     await api.pinIdea(store, clear ? '' : idea.id);
@@ -272,6 +275,7 @@ function discussionCard(idea) {
 function ideaCard(idea, compact) {
   const card = el('article', `sg-card${idea.id === pinnedId ? ' sg-pinned' : ''}`);
   const meta = el('div', 'sg-meta'); meta.append(el('span', 'sg-tag', idea.topic), el('span', '', idea.authorName), el('span', '', when(idea.createdAt)));
+  if (idea.updatedAt) meta.append(el('span', '', `수정됨 · ${when(idea.updatedAt)}`));
   if (idea.id === pinnedId) meta.prepend(el('span', 'sg-pin-label', '상단 고정'));
   const body = el('div', compact ? '' : 'sg-card-body'); const copy = el('div'); const heading = el('h2');
   heading.append(button(idea.title, () => openIdea(idea.id), 'sg-title-link'));
@@ -342,6 +346,7 @@ function renderDetail() {
   const idea = currentIdea;
   $('#detail-title').textContent = idea.title; $('#detail-body').textContent = idea.body;
   $('#detail-meta').replaceChildren(el('span', 'sg-tag', idea.topic), el('span', '', `${idea.authorName} · ${when(idea.createdAt)}`));
+  if (idea.updatedAt) $('#detail-meta').append(el('span', '', `수정됨 · ${when(idea.updatedAt)}`));
   if (idea.id === pinnedId) $('#detail-meta').prepend(el('span', 'sg-pin-label', '상단 고정'));
   $('#detail-actions').replaceChildren(...actionsFor(idea).children);
   $('#detail-together').replaceChildren(discussionCard(idea));
@@ -362,6 +367,44 @@ function updateKind() { document.querySelectorAll('[data-kind]').forEach(control
 root.addEventListener('click', event => {
   const nav = event.target.closest('[data-view]'); if (nav) navigate(nav.dataset.view);
   const type = event.target.closest('[data-kind]'); if (type) { kind = type.dataset.kind; updateKind(); }
+});
+function openIdeaEditor(idea) {
+  if (editBusy || !profile || user?.uid !== idea.authorId) return;
+  editingIdea = { ...idea };
+  $('#edit-idea-title').value = idea.title;
+  $('#edit-idea-body').value = idea.body;
+  $('#edit-idea-topic').replaceChildren(...Array.from($('#idea-topic').options, option => option.cloneNode(true)));
+  $('#edit-idea-topic').value = idea.topic;
+  $('#edit-idea-error').textContent = '';
+  $('#edit-idea-dialog').showModal(); $('#edit-idea-title').focus();
+}
+function closeIdeaEditor(force = false) {
+  if (editBusy && !force) return;
+  $('#edit-idea-dialog').close(); editingIdea = null;
+  $('#edit-idea-form').reset(); $('#edit-idea-error').textContent = '';
+}
+$('#edit-idea-cancel').addEventListener('click', () => closeIdeaEditor());
+$('#edit-idea-dialog').addEventListener('cancel', event => { event.preventDefault(); closeIdeaEditor(); });
+$('#edit-idea-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (editBusy || !editingIdea) return;
+  const original = editingIdea, uid = user?.uid;
+  const title = $('#edit-idea-title').value.trim(), body = $('#edit-idea-body').value.trim(), topic = $('#edit-idea-topic').value;
+  if (!title) { $('#edit-idea-error').textContent = '생각 한 줄을 적어주세요.'; $('#edit-idea-title').focus(); return; }
+  if (!profile || uid !== original.authorId) { closeIdeaEditor(); showStatus('글을 올린 계정으로 다시 접속해주세요.', true); return; }
+  const controls = Array.from($('#edit-idea-form').querySelectorAll('input, textarea, select, button'));
+  editBusy = true; controls.forEach(control => control.disabled = true); $('#edit-idea-error').textContent = '';
+  try {
+    const updated = await api.updateIdea(store, uid, original, { title, body, topic });
+    if (user?.uid !== uid || editingIdea !== original) return;
+    feedRows = feedRows.map(idea => idea.id === updated.id ? updated : idea);
+    extraRows = extraRows.map(idea => idea.id === updated.id ? updated : idea);
+    if (pinnedId === updated.id) pinnedIdea = updated;
+    if (currentIdea?.id === updated.id) currentIdea = updated;
+    closeIdeaEditor(true); refreshPinViews(); showStatus('생각을 수정했어요. 보탬과 함께하는 대화는 그대로예요.');
+  } catch (error) {
+    if (user?.uid === uid && editingIdea === original) $('#edit-idea-error').textContent = errorText(error);
+  } finally { editBusy = false; controls.forEach(control => control.disabled = false); }
 });
 $('#idea-form').addEventListener('submit', event => {
   event.preventDefault();
@@ -427,7 +470,7 @@ function renderRooms() {
   if (view === 'chat') {
     const selected = rooms.find(room => room.id === selectedRoom?.id) || rooms[0];
     if (!stopMessages || selectedRoom?.id !== selected.id) selectRoom(selected.id);
-    else { selectedRoom = selected; $('#room-members').textContent = `${selected.memberIds.length}명 · 초대받은 사람끼리 나누는 대화`; renderRoomContext(selected); }
+    else { selectedRoom = selected; $('#room-title').textContent = selected.title; $('#room-members').textContent = `${selected.memberIds.length}명 · 초대받은 사람끼리 나누는 대화`; renderRoomContext(selected); }
   }
 }
 function selectRoom(id) {

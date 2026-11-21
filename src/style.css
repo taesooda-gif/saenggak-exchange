@@ -167,3 +167,9 @@ body { margin:0; background:light-dark(#fff,#17181b); }
 #sg-community .sg-divider::before, #sg-community .sg-divider::after { content:''; height:1px; flex:1; background:var(--sg-line); }
 #sg-community #account-email { overflow-wrap:anywhere; }
 #sg-community #account-dialog > .sg-actions { margin-top:24px; justify-content:space-between; }
+#sg-community #edit-idea-dialog { max-width:640px; max-height:calc(100dvh - 48px); overflow-y:auto; }
+#sg-community #edit-idea-form { padding:0; gap:16px; }
+#sg-community #edit-idea-form p { margin:8px 0 0; }
+#sg-community #edit-idea-form label { margin:0; }
+#sg-community #edit-idea-body { min-height:160px; }
+#sg-community #edit-idea-error:empty { display:none; }

@@ -7,13 +7,14 @@ const root = $('#sg-community');
 let store, user, profile, currentIdea, selectedRoom;
 let view = 'home', selectedId = '', kind = '경험', feedRows = [], extraRows = [], rooms = [];
 let cursor, hasMore = false, recentComments = [], previousComments = [], recentMessages = [], previousMessages = [];
-let stopFeed, stopRooms, stopIdea, stopComments, stopMessages, stopRequests;
+let stopFeed, stopRooms, stopIdea, stopComments, stopMessages, stopInbox;
 let identityReady = Promise.resolve(), guestResolve, guestPromise;
 let identityVersion = 0, activeUid = '', authBusy = false;
 let editingIdea = null, editBusy = false;
 const interestState = new Map(), activityCache = new Map();
 const syncedDiscussions = new Map();
-let requestVersion = 0;
+let requestVersion = 0, requestGroups = [];
+const decidingRequests = new Set();
 let canPin = false, pinnedId = '', pinnedIdea = null, stopPinnedIdea, stopModerator;
 
 function refreshPinViews() { renderFeed(); if (view === 'detail') renderDetail(); }
@@ -65,9 +66,8 @@ function empty(title, description, action) {
   return box;
 }
 function stopDetail() {
-  [stopIdea, stopComments, stopRequests].forEach(stop => stop?.());
-  stopIdea = stopComments = stopRequests = undefined;
-  requestVersion++;
+  [stopIdea, stopComments].forEach(stop => stop?.());
+  stopIdea = stopComments = undefined;
 }
 function stopChat() { stopMessages?.(); stopMessages = undefined; }
 function displayView(name) {
@@ -80,6 +80,7 @@ function displayView(name) {
   if (name !== 'detail') stopDetail();
   if (name !== 'chat') stopChat();
   if (name === 'chat') renderRooms();
+  renderRequests();
   window.scrollTo({ top: 0, behavior: 'instant' });
 }
 function navigate(name, updateHash = true) {
@@ -193,7 +194,8 @@ async function setIdentity(next) {
     closeIdeaEditor(true);
     activeUid = next?.uid || '';
     stopRooms?.(); stopRooms = undefined; stopModerator?.(); stopModerator = undefined;
-    stopRequests?.(); stopRequests = undefined; requestVersion++;
+    stopInbox?.(); stopInbox = undefined; requestVersion++; requestGroups = []; decidingRequests.clear();
+    $('#request-error').hidden = true; $('#request-result').textContent = ''; renderRequests();
     stopChat(); rooms = []; selectedRoom = null; recentMessages = []; previousMessages = [];
     interestState.clear(); syncedDiscussions.clear(); canPin = false;
     $('#messages').replaceChildren(); $('#room-list').replaceChildren(); $('#home-rooms').replaceChildren();
@@ -249,6 +251,8 @@ function actionsFor(idea, compact = false) {
     interest.setAttribute('aria-pressed', String(interested)); actions.append(interest);
   }
   actions.append(button(`보태기 ${idea.contributionCount}`, () => openIdea(idea.id)));
+  const pending = requestGroups.find(group => group.id === idea.id)?.requests.length || 0;
+  if (user?.uid === idea.authorId && pending) actions.append(button(`참여 신청 ${pending}건`, () => navigate('chat'), 'sg-button sg-request-link'));
   if (profile && user?.uid === idea.authorId) actions.append(button('수정하기', () => openIdeaEditor(idea)));
   if (canPin) actions.append(button(idea.id === pinnedId ? '고정 해제' : '상단 고정', async () => {
     const clear = idea.id === pinnedId;
@@ -337,7 +341,7 @@ async function openIdea(id, updateHash = true) {
       const uid = user.uid;
       api.readInterest(store, uid, id).then(active => { if (user?.uid !== uid) return; interestState.set(id, active); if (currentIdea?.id === id) renderDetail(); }).catch(error => { if (user?.uid === uid) showStatus(errorText(error), true); });
     }
-    watchOwnerRequests();
+    renderRequests();
   }, error => showStatus(errorText(error), true));
   stopComments = api.watchContributions(store, id, (rows, more) => { recentComments = rows; $('#older-comments').hidden = !more || Boolean(previousComments.length && previousComments.length % 50); renderComments(); }, error => showStatus(errorText(error), true));
 }
@@ -426,20 +430,68 @@ $('#comment-form').addEventListener('submit', event => {
   });
 });
 
+function renderRequests() {
+  const groups = user && profile ? requestGroups : [];
+  const count = groups.reduce((sum, group) => sum + group.requests.length, 0);
+  $('#request-badge').hidden = !count;
+  $('#request-badge').textContent = String(count);
+  $('#chat-nav').setAttribute('aria-label', count ? `함께하기 · 참여 신청 ${count}건` : '함께하기');
+  $('#request-notice').hidden = !count || view === 'chat';
+  $('#request-notice-title').textContent = `내 생각에 함께하고 싶은 신청이 ${count}건 있어요`;
+  $('#request-inbox').hidden = !count;
+  const inbox = $('#inbox-list'); inbox.replaceChildren();
+  for (const group of groups) {
+    const section = el('section', 'sg-request-group');
+    const heading = el('h3'); heading.append(button(group.title, () => openIdea(group.id), 'sg-title-link'));
+    section.append(heading);
+    group.requests.forEach(request => section.append(requestRow(group.id, request)));
+    inbox.append(section);
+  }
+  const requests = view === 'detail' && currentIdea?.authorId === user?.uid
+    ? groups.find(group => group.id === currentIdea.id)?.requests || [] : [];
+  $('#join-requests').hidden = !requests.length;
+  $('#request-list').replaceChildren(...requests.map(request => requestRow(currentIdea.id, request)));
+}
+function requestRow(id, request) {
+  const item = el('div', 'sg-request'), copy = el('div', 'sg-request-copy');
+  copy.append(el('strong', '', `${request.authorName}님이 함께하고 싶어 해요.`), el('p', 'sg-caption', `참여 신청 · ${when(request.createdAt)}`));
+  const actions = el('div', 'sg-actions');
+  const accept = button('참여 수락', () => decideJoin(id, request, true), 'sg-button sg-primary');
+  const decline = button('이번에는 어려워요', () => decideJoin(id, request, false));
+  accept.disabled = decline.disabled = decidingRequests.has(`${id}:${request.id}`);
+  actions.append(accept, decline); item.append(copy, actions); return item;
+}
+async function decideJoin(id, request, accept) {
+  const key = `${id}:${request.id}`, uid = user?.uid, version = requestVersion;
+  if (!uid || decidingRequests.has(key)) return;
+  decidingRequests.add(key); renderRequests(); $('#request-error').hidden = true;
+  try {
+    await api.decideRequest(store, id, request.id, accept);
+    if (user?.uid !== uid || requestVersion !== version) return;
+    const message = accept ? `${request.authorName}님의 참여를 수락했어요. 이제 같은 대화방에서 이야기할 수 있어요.` : `${request.authorName}님의 신청을 정리했어요.`;
+    $('#request-result').textContent = message; showStatus(view === 'chat' ? '' : message);
+  } catch (error) {
+    if (user?.uid !== uid || requestVersion !== version) return;
+    $('#request-error').textContent = errorText(error); $('#request-error').hidden = false;
+  } finally {
+    if (requestVersion === version) { decidingRequests.delete(key); renderRequests(); }
+  }
+}
 function watchOwnerRequests() {
-  if (stopRequests || !currentIdea || user?.uid !== currentIdea.authorId) return;
-  const uid = user.uid, id = currentIdea.id, version = requestVersion;
-  stopRequests = api.watchRequests(store, id, requests => {
-    if (user?.uid !== uid || currentIdea?.id !== id || version !== requestVersion) return;
-    $('#join-requests').hidden = requests.length === 0; const list = $('#request-list'); list.replaceChildren();
-    requests.forEach(request => {
-      const item = el('div', 'sg-request'); item.append(el('span', '', `${request.authorName}님이 함께하고 싶어 해요.`));
-      const actions = el('div', 'sg-actions');
-      const id = currentIdea.id;
-      actions.append(button('함께하기', () => api.decideRequest(store, id, request.id, true), 'sg-button sg-primary'), button('이번에는 어려워요', () => api.decideRequest(store, id, request.id, false)));
-      item.append(actions); list.append(item);
-    });
-  }, error => showStatus(errorText(error), true));
+  stopInbox?.(); stopInbox = undefined;
+  const uid = user?.uid, version = ++requestVersion;
+  requestGroups = []; decidingRequests.clear(); renderRequests();
+  $('#request-error').hidden = true;
+  if (!uid || !profile) return;
+  stopInbox = api.watchRequestInbox(store, uid, groups => {
+    if (user?.uid !== uid || requestVersion !== version) return;
+    requestGroups = groups; renderRequests(); renderFeed();
+    if (view === 'detail') renderDetail();
+  }, error => {
+    if (user?.uid !== uid || requestVersion !== version) return;
+    $('#request-error').textContent = `참여 신청을 불러오지 못했어요. ${errorText(error)}`;
+    $('#request-error').hidden = false;
+  });
 }
 async function joinIdea(idea) {
   const who = await person(); if (!who) return;

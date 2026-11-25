@@ -133,6 +133,18 @@ body { margin:0; background:light-dark(#fff,#17181b); }
 #sg-community .sg-bubble { white-space:pre-wrap; }
 #sg-community .sg-request { display:flex; flex-wrap:wrap; justify-content:space-between; gap:10px; padding:16px 0; border-bottom:1px solid var(--sg-line); }
 #sg-community #join-requests { margin-bottom:32px; }
+#sg-community .sg-request-badge { display:inline-flex; align-items:center; justify-content:center; min-width:20px; height:20px; margin-left:5px; padding:0 5px; border-radius:10px; background:var(--sg-accent-ink); color:white; font-size:11px; }
+#sg-community .sg-request-notice { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-top:24px; padding:18px 20px; background:var(--sg-wash); border-radius:var(--sg-radius); }
+#sg-community .sg-request-notice p, #sg-community .sg-request-copy p { margin-top:6px; }
+#sg-community .sg-request-notice .sg-button { flex-shrink:0; }
+#sg-community .sg-request-inbox { border:1px solid var(--sg-line); border-top:3px solid var(--sg-accent); padding:24px; border-radius:var(--sg-radius); margin-bottom:24px; }
+#sg-community .sg-request-inbox > p { margin-top:8px; }
+#sg-community .sg-request-group { margin-top:24px; }
+#sg-community .sg-request-group h3 { font-size:16px; }
+#sg-community .sg-request { align-items:center; }
+#sg-community .sg-request-link { color:var(--sg-accent-ink); background:var(--sg-wash); }
+#sg-community .sg-request-copy { flex:1 1 220px; overflow-wrap:anywhere; }
+@media(max-width:620px) { #sg-community .sg-request-notice { align-items:flex-start; flex-direction:column; padding:16px; } #sg-community .sg-request-inbox { padding:18px 14px; } #sg-community .sg-nav { gap:18px; } }
 #sg-community .sg-footer { display:flex; flex-wrap:wrap; gap:10px 24px; margin:24px 32px 0; padding:24px 0; border-top:1px solid var(--sg-line); color:var(--sg-soft); font-size:13px; }
 #sg-community dialog { max-width:420px; width:calc(100% - 48px); padding:28px; border:1px solid var(--sg-line); border-radius:14px; background:var(--sg-paper); color:var(--sg-text); }
 #sg-community dialog::backdrop { background:light-dark(#11111166,#000000aa); }

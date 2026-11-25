@@ -149,10 +149,54 @@ export const watchRooms = (store, uid, callback, failure) => onSnapshot(
   { includeMetadataChanges: true },
   snapshot => { if (!snapshot.metadata.hasPendingWrites) callback(snapshot.docs.map(row)); }, failure,
 );
-export const watchRequests = (store, id, callback, failure) => onSnapshot(
-  query(collection(store.db, 'ideas', id, 'requests'), where('status', '==', 'pending'), limit(20)),
-  snapshot => callback(snapshot.docs.map(row)), failure,
-);
+// Follow every bounded page so older thoughts and large queues stay discoverable.
+// Document IDs provide stable boundaries without requiring a composite index.
+function watchPages(ref, filters, callback, failure) {
+  const pages = [];
+  let active = true;
+  const publish = () => callback([...new Map(pages.flatMap(page => page.docs).map(snap => [snap.id, row(snap)])).values()]);
+  function subscribe(index, after) {
+    const page = { docs: [], stop: undefined, boundary: undefined };
+    pages[index] = page;
+    page.stop = onSnapshot(query(ref, ...filters, orderBy(documentId()), ...(after ? [startAfter(after)] : []), limit(20)), { includeMetadataChanges: true }, snapshot => {
+      // A newly created thought must reach the server before its requests can be authorized.
+      if (!active || pages[index] !== page || snapshot.metadata.hasPendingWrites) return;
+      page.docs = snapshot.docs;
+      const boundary = snapshot.size === 20 ? snapshot.docs.at(-1).id : null;
+      if (boundary !== page.boundary) {
+        pages.splice(index + 1).forEach(next => next.stop?.());
+        page.boundary = boundary;
+        if (boundary) subscribe(index + 1, snapshot.docs.at(-1));
+      }
+      publish();
+    }, error => { if (active && pages[index] === page) failure(error); });
+  }
+  subscribe(0);
+  return () => { active = false; pages.forEach(page => page.stop?.()); };
+}
+
+export function watchRequestInbox(store, uid, callback, failure) {
+  const groups = new Map();
+  let active = true;
+  const publish = () => {
+    if (active) callback([...groups.values()].filter(group => group.requests.length).map(({ idea, requests }) => ({ ...idea, requests })));
+  };
+  const stopIdeas = watchPages(collection(store.db, 'ideas'), [where('authorId', '==', uid)], ideas => {
+    const ids = new Set(ideas.map(idea => idea.id));
+    for (const [id, group] of groups) if (!ids.has(id)) { group.stop(); groups.delete(id); }
+    for (const idea of ideas) {
+      if (groups.has(idea.id)) { groups.get(idea.id).idea = idea; continue; }
+      const group = { idea, requests: [], stop: undefined };
+      groups.set(idea.id, group);
+      group.stop = watchPages(collection(store.db, 'ideas', idea.id, 'requests'), [where('status', '==', 'pending')], requests => {
+        if (!active || groups.get(idea.id) !== group) return;
+        group.requests = requests; publish();
+      }, error => { if (active && groups.get(idea.id) === group) failure(error); });
+    }
+    publish();
+  }, failure);
+  return () => { active = false; stopIdeas(); groups.forEach(group => group.stop()); groups.clear(); };
+}
 export const getRequest = async (store, id, uid) => {
   const snapshot = await getDoc(doc(store.db, 'ideas', id, 'requests', uid));
   return snapshot.exists() ? row(snapshot) : null;

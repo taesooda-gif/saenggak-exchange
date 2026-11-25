@@ -71,6 +71,94 @@ test('프로필과 참여 신청은 본인과 필요한 담당자에게만 보�
   await assertFails(updateDoc(doc(alice.db, 'rooms', id), { memberIds: ['alice', 'eve'], lastAddedId: 'eve' }));
 });
 
+function inboxTracker(store, uid) {
+  let groups = [], error, count = 0;
+  const waiters = new Set();
+  const notify = () => waiters.forEach(check => check());
+  const stop = api.watchRequestInbox(store, uid, value => { groups = value; count++; notify(); }, value => { error = value; notify(); });
+  return {
+    stop,
+    get count() { return count; },
+    until(predicate) {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { waiters.delete(check); reject(new Error('참여 신청 알림 대기 시간 초과')); }, 10000);
+        function check() {
+          if (!error && !predicate(groups)) return;
+          clearTimeout(timer); waiters.delete(check);
+          if (error) reject(error); else resolve(groups);
+        }
+        waiters.add(check); check();
+      });
+    },
+  };
+}
+
+test('작성자 알림함은 글을 열지 않아도 신청과 수락·거절을 실시간 반영한다', async () => {
+  const inbox = inboxTracker(alice, 'alice'), other = inboxTracker(bob, 'bob');
+  try {
+    await inbox.until(() => inbox.count > 0);
+    await api.requestToJoin(bob, personB, id);
+    const groups = await inbox.until(rows => rows[0]?.requests.length === 1);
+    assert.equal(groups[0].title, '어른들의 일을 소개해요');
+    assert.equal(groups[0].requests[0].authorName, '달팽이');
+    await other.until(rows => other.count > 0 && rows.length === 0);
+    await assertFails(getDocs(query(collection(bob.db, 'ideas', id, 'requests'), limit(20))));
+    await api.decideRequest(alice, id, 'bob', true);
+    await inbox.until(rows => rows.length === 0);
+    assert.equal((await getDoc(doc(bob.db, 'rooms', id))).data().memberIds.length, 2);
+    await api.requestToJoin(eve, { uid: 'eve', name: '방문자' }, id);
+    await inbox.until(rows => rows[0]?.requests[0]?.authorId === 'eve');
+    await api.decideRequest(alice, id, 'eve', false);
+    await inbox.until(rows => rows.length === 0);
+    await assertFails(getDoc(doc(eve.db, 'rooms', id)));
+    inbox.stop(); const before = inbox.count;
+    await api.updateIdea(alice, 'alice', { id, ...(await getDoc(doc(alice.db, 'ideas', id))).data() }, { title: '변경한 생각', body: '', topic: '아이의 내일' });
+    assert.equal(inbox.count, before, '구독 종료 후 이전 계정의 알림을 전달하지 않는다');
+  } finally { inbox.stop(); other.stop(); }
+});
+
+test('알림함은 20개를 넘는 내 글과 신청도 누락하거나 중복하지 않는다', async () => {
+  await env.withSecurityRulesDisabled(async context => {
+    const db = context.firestore();
+    const batch = writeBatch(db);
+    for (let i = 0; i < 23; i++) {
+      const ideaId = `paged-${String(i).padStart(2, '0')}`;
+      batch.set(doc(db, 'ideas', ideaId), { authorId: 'alice', title: ideaId });
+      batch.set(doc(db, 'rooms', ideaId), { ownerId: 'alice', title: ideaId, memberIds: ['alice'] });
+      for (let j = 0; j < (i === 22 ? 22 : 1); j++) {
+        const uid = `guest-${String(j).padStart(2, '0')}`;
+        batch.set(doc(db, 'ideas', ideaId, 'requests', uid), { authorId: uid, authorName: uid, status: 'pending', createdAt: Timestamp.now(), decidedAt: null });
+      }
+    }
+    await batch.commit();
+  });
+  const inbox = inboxTracker(alice, 'alice');
+  try {
+    const groups = await inbox.until(rows => rows.length === 23 && rows.find(group => group.id === 'paged-22')?.requests.length === 22);
+    assert.equal(new Set(groups.map(group => group.id)).size, 23);
+    await api.decideRequest(alice, 'paged-22', 'guest-00', false);
+    const shifted = await inbox.until(rows => rows.find(group => group.id === 'paged-22')?.requests.length === 21 && !rows.find(group => group.id === 'paged-22').requests.some(request => request.id === 'guest-00'));
+    assert.equal(new Set(shifted.find(group => group.id === 'paged-22').requests.map(request => request.id)).size, 21);
+    await env.withSecurityRulesDisabled(async context => {
+      const db = context.firestore();
+      await setDoc(doc(db, 'ideas', 'aaa-first'), { authorId: 'alice', title: '앞쪽에 새로 들어온 생각' });
+      await setDoc(doc(db, 'ideas', 'aaa-first', 'requests', 'new-guest'), { authorId: 'new-guest', authorName: '새참여자', status: 'pending', createdAt: Timestamp.now(), decidedAt: null });
+    });
+    await inbox.until(rows => rows.length === 24 && rows.find(group => group.id === 'paged-22')?.requests.length === 21);
+  } finally { inbox.stop(); }
+});
+
+test('알림을 보고 있는 중에 올린 새 글도 저장 완료 후 신청을 받는다', async () => {
+  const inbox = inboxTracker(alice, 'alice');
+  try {
+    await inbox.until(() => inbox.count > 0);
+    const newId = await api.createIdea(alice, personA, { title: '새로운 생각', body: '', topic: '생활 속 생각' });
+    await api.requestToJoin(bob, personB, newId);
+    const groups = await inbox.until(rows => rows.some(group => group.id === newId && group.requests.length === 1));
+    assert.equal(groups.find(group => group.id === newId).requests[0].authorName, '달팽이');
+  } finally { inbox.stop(); }
+});
+
 test('대화를 시작하면 공개 글에는 실제 참여 인원과 시간만 나타난다', async () => {
   await api.sendMessage(alice, personA, id, '참여자에게만 보이는 대화');
   const idea = (await getDoc(doc(visitor.db, 'ideas', id))).data();

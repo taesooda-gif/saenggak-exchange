@@ -262,18 +262,25 @@ function actionsFor(idea, compact = false) {
   return actions;
 }
 function discussionCard(idea) {
-  const group = el('section', 'sg-discussion');
-  group.setAttribute('aria-label', '이 생각의 함께하기');
-  const copy = el('div');
   const mine = rooms.find(room => room.id === idea.id);
-  const count = idea.participantCount || mine?.memberIds.length;
+  const count = Math.max(1, idea.participantCount || 0, mine?.memberIds.length || 0);
   const started = Boolean(milliseconds(idea.lastChatAt));
-  copy.append(el('strong', '', started ? '이 생각에서 대화가 시작됐어요' : '이 생각을 더 깊이 나눠볼까요?'));
-  copy.append(el('p', 'sg-caption', started
-    ? `작성자 포함 ${count || 1}명이 함께해요 · 최근 대화 ${when(idea.lastChatAt)}`
-    : '관심이 맞는 사람끼리 주제를 좁히고, 함께 해볼 일을 찾아요.'));
+  const state = started ? 'started' : count > 1 ? 'ready' : 'waiting';
+  const group = el('section', `sg-discussion sg-discussion-${state}`);
+  group.setAttribute('aria-label', '이 생각의 함께하기');
+  const copy = el('div', 'sg-discussion-copy');
+  copy.append(el('span', 'sg-discussion-label', started ? '대화 시작됨' : count > 1 ? '대화 준비 중' : '함께할 사람 모집'));
+  copy.append(el('strong', 'sg-discussion-title', started
+    ? count > 1 ? `${count}명이 함께하는 대화` : '첫 이야기가 올라왔어요'
+    : count > 1 ? `${count}명이 모였어요` : '첫 대화를 함께 시작해보세요'));
+  copy.append(el('p', 'sg-discussion-description', started
+    ? `작성자 포함 ${count}명 · 최근 대화 ${when(idea.lastChatAt)}`
+    : count > 1 ? '아직 대화 전이에요. 첫 인사를 나눠보세요.' : '아직 대화 전이에요. 관심이 맞는 사람과 생각을 더 나눠봐요.'));
   copy.append(el('p', 'sg-discussion-privacy', '대화 내용은 참여자에게만 보여요.'));
-  group.append(copy, button(mine ? '함께하는 대화' : '대화에 함께하기', () => joinIdea(idea), 'sg-button sg-discussion-button'));
+  const action = el('div', 'sg-discussion-action');
+  action.append(button(mine ? '대화방 들어가기' : '참여 신청하기', () => joinIdea(idea), 'sg-button sg-discussion-button'));
+  action.append(el('span', 'sg-discussion-hint', mine ? '참여 중 · 바로 들어갈 수 있어요' : '글쓴이가 수락하면 참여해요'));
+  group.append(copy, action);
   return group;
 }
 function ideaCard(idea, compact) {

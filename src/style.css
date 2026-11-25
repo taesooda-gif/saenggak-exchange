@@ -154,11 +154,25 @@ body { margin:0; background:light-dark(#fff,#17181b); }
 #sg-community .sg-chart-placeholder { color:var(--sg-soft); font-size:13px; min-height:96px; display:flex; align-items:center; }
 #sg-community .sg-market-chart { height:76px; }
 .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
-#sg-community .sg-discussion { display:flex; justify-content:space-between; align-items:center; gap:16px; margin-top:20px; padding:16px 18px; background:var(--sg-wash); border-radius:var(--sg-radius); }
-#sg-community .sg-discussion strong { font-size:15px; }
-#sg-community .sg-discussion p { margin-top:5px; }
+#sg-community .sg-discussion { --sg-talk:light-dark(#18704e,#89dab5); --sg-talk-bg:light-dark(#edf8f2,#192e25); --sg-talk-line:light-dark(#c4e4d3,#355e4a); display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:18px 24px; margin-top:20px; padding:20px; background:var(--sg-bg); border:1px solid var(--sg-line); border-radius:var(--sg-radius); }
+#sg-community .sg-discussion-copy { flex:1 1 260px; min-width:0; }
+#sg-community .sg-discussion-label { display:inline-flex; align-items:center; padding:3px 9px; border-radius:5px; background:var(--sg-paper); border:1px solid var(--sg-line); color:var(--sg-soft); font-size:14px; font-weight:650; }
+#sg-community .sg-discussion-title { display:block; margin-top:10px; font-size:17px; font-weight:700; line-height:1.45; word-break:keep-all; overflow-wrap:anywhere; }
+#sg-community .sg-discussion p { margin-top:6px; }
+#sg-community .sg-discussion-description { color:var(--sg-soft); font-size:14px; }
 #sg-community .sg-discussion-privacy { color:var(--sg-soft); font-size:12px; }
-#sg-community .sg-discussion-button { flex-shrink:0; color:var(--sg-accent-ink); background:var(--sg-paper); }
+#sg-community .sg-discussion-action { display:flex; flex-direction:column; align-items:stretch; gap:8px; }
+#sg-community .sg-discussion-button { min-height:44px; padding:10px 18px; color:var(--sg-text); background:var(--sg-paper); border:1px solid light-dark(#b8bec5,#727780); font-weight:700; }
+#sg-community .sg-discussion-button:hover { background:var(--sg-line); }
+#sg-community .sg-discussion-button:focus-visible { outline:3px solid var(--sg-text); outline-offset:3px; }
+#sg-community .sg-discussion-hint { color:var(--sg-soft); text-align:center; font-size:12px; }
+#sg-community .sg-discussion-ready { border-left:4px solid var(--sg-accent-ink); background:var(--sg-wash); }
+#sg-community .sg-discussion-ready .sg-discussion-label { color:var(--sg-accent-ink); border-color:var(--sg-accent-ink); }
+#sg-community .sg-discussion-started { background:var(--sg-talk-bg); border-color:var(--sg-talk-line); border-left:4px solid var(--sg-talk); }
+#sg-community .sg-discussion-started .sg-discussion-label { color:var(--sg-talk); border-color:var(--sg-talk-line); }
+#sg-community .sg-discussion-started .sg-discussion-title { color:var(--sg-talk); font-size:19px; }
+#sg-community .sg-discussion-started .sg-discussion-button { background:var(--sg-talk); color:light-dark(#ffffff,#11271d); border-color:var(--sg-talk); }
+#sg-community .sg-discussion-started .sg-discussion-button:hover { background:light-dark(#115738,#a1e9c8); }
 #sg-community #detail-together { margin-bottom:28px; }
 #sg-community .sg-pinned { border-top:2px solid var(--sg-accent-ink); }
 #sg-community .sg-pin-label { color:var(--sg-accent-ink); font-weight:700; }
@@ -169,7 +183,7 @@ body { margin:0; background:light-dark(#fff,#17181b); }
 #sg-community .sg-room-context p { margin-top:8px; font-size:14px; color:var(--sg-soft); }
 #sg-community .sg-room-context .sg-button { margin-top:8px; }
 #sg-community .sg-section-top h1 + p { margin-top:8px; }
-@media(max-width:620px) { #sg-community .sg-discussion { align-items:flex-start; flex-direction:column; gap:12px; padding:15px; } }
+@media(max-width:620px) { #sg-community .sg-discussion { align-items:stretch; flex-direction:column; gap:16px; padding:16px; } #sg-community .sg-discussion-copy { flex-basis:auto; } #sg-community .sg-discussion-action { align-self:stretch; } }
 @media(max-width:900px) { #sg-community .sg-brand { width:auto; padding-right:0; } #sg-community .sg-nav { order:3; flex-basis:100%; } #sg-community .sg-header { gap:12px; } }
 @media(max-width:620px) { #sg-community .sg-profile { font-size:12px; padding:7px; max-width:122px; } #sg-community .sg-chat-list { border-bottom:1px solid var(--sg-line); } #sg-community .sg-actions .sg-button { font-size:13px; } }
 

@@ -199,3 +199,26 @@ body { margin:0; background:light-dark(#fff,#17181b); }
 #sg-community #edit-idea-form label { margin:0; }
 #sg-community #edit-idea-body { min-height:160px; }
 #sg-community #edit-idea-error:empty { display:none; }
+#sg-community .sg-legacy-link { font-size:12px; padding:7px 9px; color:var(--sg-soft); }
+#sg-community #refinement-section { margin:28px 0; border-top:1px solid var(--sg-line); padding-top:24px; }
+#sg-community #refinement-section > .sg-thread-label { flex-wrap:wrap; gap:12px; }
+#sg-community .sg-refinement { margin-top:20px; padding:22px; border:1px solid light-dark(#c4e4d3,#355e4a); border-left:4px solid light-dark(#18704e,#89dab5); border-radius:8px; background:light-dark(#f5fbf8,#192e25); }
+#sg-community .sg-refinement h3 { margin:12px 0 8px; font-size:20px; line-height:1.5; overflow-wrap:anywhere; }
+#sg-community .sg-refinement h4 { margin:20px 0 6px; font-size:14px; }
+#sg-community .sg-refinement-copy { white-space:pre-wrap; overflow-wrap:anywhere; }
+#sg-community .sg-refinement > .sg-caption { margin-top:14px; }
+#sg-community .sg-refinement > .sg-button { margin-top:18px; }
+#sg-community .sg-source-quote { margin:14px 0; padding:10px 14px; background:var(--sg-bg); border-radius:6px; font-size:14px; }
+#sg-community .sg-source-quote summary { cursor:pointer; color:var(--sg-accent-ink); }
+#sg-community .sg-source-quote p { margin-top:10px; white-space:pre-wrap; overflow-wrap:anywhere; }
+#sg-community .sg-comment-actions { display:flex; flex-wrap:wrap; gap:6px 16px; margin-top:10px; }
+#sg-community .sg-comment-actions .sg-button { font-size:13px; }
+#sg-community .sg-comment-context { display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:12px; background:var(--sg-wash); border-radius:8px; }
+#sg-community .sg-context-link { display:block; text-align:left; overflow-wrap:anywhere; }
+#sg-community #refinement-dialog { max-width:640px; max-height:calc(100dvh - 48px); overflow-y:auto; }
+#sg-community #refinement-form { padding:0; gap:16px; }
+#sg-community #refinement-form p { margin:8px 0 0; }
+#sg-community #refinement-form label { margin:0; }
+#sg-community #refinement-form textarea { min-height:90px; }
+#sg-community #refinement-error:empty { display:none; }
+@media(max-width:620px) { #sg-community .sg-refinement { padding:16px; } #sg-community #refinement-section .sg-thread-label { align-items:flex-start; flex-direction:column; } }

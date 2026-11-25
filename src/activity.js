@@ -18,7 +18,7 @@ export function activitySeries(events, now = Date.now()) {
     for (const event of valid) {
       const eventDay = dayNumber(event.createdAt);
       if (eventDay > day) continue;
-      score += event.type === 'contribution' ? 5 : 1;
+      score += ['contribution', 'refinement'].includes(event.type) ? 5 : 1;
       last = last === null ? eventDay : Math.max(last, eventDay);
     }
     const quietDays = last === null ? 0 : Math.max(0, day - last - 7);
@@ -27,6 +27,6 @@ export function activitySeries(events, now = Date.now()) {
   return points;
 }
 export function activityLabel(idea, now = Date.now()) {
-  if (!idea.interestCount && !idea.contributionCount) return '첫 보탬을 기다려요';
+  if (!idea.interestCount && !idea.contributionCount && !idea.refinementCount) return '첫 보탬을 기다려요';
   return dayNumber(now) - dayNumber(idea.lastActivityAt) > 7 ? '잠시 조용해요' : '함께 자라는 중';
 }

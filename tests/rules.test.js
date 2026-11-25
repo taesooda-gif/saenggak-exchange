@@ -7,6 +7,12 @@ import * as api from '../src/data.js';
 
 let env, alice, bob, eve, visitor, id;
 const personA = { uid: 'alice', name: '도토리' }, personB = { uid: 'bob', name: '달팽이' };
+// Existing private rooms/requests predate the public flow; new clients no longer create them.
+async function legacyRequest(_store, person, ideaId) {
+  await env.withSecurityRulesDisabled(ctx => setDoc(doc(ctx.firestore(), 'ideas', ideaId, 'requests', person.uid), {
+    authorId: person.uid, authorName: person.name, status: 'pending', createdAt: Timestamp.now(), decidedAt: null,
+  }));
+}
 before(async () => {
   env = await initializeTestEnvironment({ projectId: 'demo-saenggak-exchange', firestore: { rules: await readFile(new URL('../firestore.rules', import.meta.url), 'utf8'), host: '127.0.0.1', port: 8080 } });
 });
@@ -19,6 +25,9 @@ beforeEach(async () => {
   visitor = { db: env.unauthenticatedContext().firestore() };
   await Promise.all([[alice, personA], [bob, personB], [eve, { uid: 'eve', name: '방문자' }]].map(([store, person]) => setDoc(doc(store.db, 'profiles', person.uid), { displayName: person.name, createdAt: serverTimestamp() })));
   id = await api.createIdea(alice, personA, { title: '어른들의 일을 소개해요', body: '각자의 경험을 모아볼까요?', topic: '아이의 내일' });
+  await env.withSecurityRulesDisabled(ctx => setDoc(doc(ctx.firestore(), 'rooms', id), {
+    ownerId: 'alice', title: '어른들의 일을 소개해요', memberIds: ['alice'], createdAt: Timestamp.now(), lastAddedId: '',
+  }));
 });
 test('비로그인 방문자는 글을 읽을 수 있지만 글을 쓰거나 무제한 조회할 수 없다', async () => {
   const result = await assertSucceeds(getDocs(query(collection(visitor.db, 'ideas'), limit(20))));
@@ -51,7 +60,7 @@ test('관심은 사용자당 하나이며 취소와 재등록으로 활동 기�
 test('대화는 초대 전에는 읽거나 쓸 수 없고, 글쓴이가 수락하면 가능하다', async () => {
   await assertFails(getDoc(doc(bob.db, 'rooms', id)));
   await assertFails(api.sendMessage(bob, personB, id, '초대 전 메시지'));
-  await api.requestToJoin(bob, personB, id);
+  await legacyRequest(bob, personB, id);
   await assertFails(api.decideRequest(eve, id, 'bob', true));
   await assertFails(updateDoc(doc(bob.db, 'rooms', id), { memberIds: ['alice', 'bob'], lastAddedId: 'bob' }));
   await assertSucceeds(api.decideRequest(alice, id, 'bob', true));
@@ -65,7 +74,7 @@ test('대화는 초대 전에는 읽거나 쓸 수 없고, 글쓴이가 수락�
 });
 test('프로필과 참여 신청은 본인과 필요한 담당자에게만 보인다', async () => {
   await assertFails(getDoc(doc(eve.db, 'profiles', 'alice')));
-  await api.requestToJoin(bob, personB, id);
+  await legacyRequest(bob, personB, id);
   await assertFails(api.getRequest(eve, id, 'bob'));
   await assertSucceeds(api.getRequest(alice, id, 'bob'));
   await assertFails(updateDoc(doc(alice.db, 'rooms', id), { memberIds: ['alice', 'eve'], lastAddedId: 'eve' }));
@@ -97,7 +106,7 @@ test('작성자 알림함은 글을 열지 않아도 신청과 수락·거절을
   const inbox = inboxTracker(alice, 'alice'), other = inboxTracker(bob, 'bob');
   try {
     await inbox.until(() => inbox.count > 0);
-    await api.requestToJoin(bob, personB, id);
+    await legacyRequest(bob, personB, id);
     const groups = await inbox.until(rows => rows[0]?.requests.length === 1);
     assert.equal(groups[0].title, '어른들의 일을 소개해요');
     assert.equal(groups[0].requests[0].authorName, '달팽이');
@@ -106,7 +115,7 @@ test('작성자 알림함은 글을 열지 않아도 신청과 수락·거절을
     await api.decideRequest(alice, id, 'bob', true);
     await inbox.until(rows => rows.length === 0);
     assert.equal((await getDoc(doc(bob.db, 'rooms', id))).data().memberIds.length, 2);
-    await api.requestToJoin(eve, { uid: 'eve', name: '방문자' }, id);
+    await legacyRequest(eve, { uid: 'eve', name: '방문자' }, id);
     await inbox.until(rows => rows[0]?.requests[0]?.authorId === 'eve');
     await api.decideRequest(alice, id, 'eve', false);
     await inbox.until(rows => rows.length === 0);
@@ -153,7 +162,7 @@ test('알림을 보고 있는 중에 올린 새 글도 저장 완료 후 신청�
   try {
     await inbox.until(() => inbox.count > 0);
     const newId = await api.createIdea(alice, personA, { title: '새로운 생각', body: '', topic: '생활 속 생각' });
-    await api.requestToJoin(bob, personB, newId);
+    await legacyRequest(bob, personB, newId);
     const groups = await inbox.until(rows => rows.some(group => group.id === newId && group.requests.length === 1));
     assert.equal(groups.find(group => group.id === newId).requests[0].authorName, '달팽이');
   } finally { inbox.stop(); }
@@ -167,7 +176,7 @@ test('대화를 시작하면 공개 글에는 실제 참여 인원과 시간만 
   assert.ok(idea.lastChatMessageId);
   assert.ok(!JSON.stringify(idea).includes('참여자에게만 보이는 대화'));
   await assertFails(getDoc(doc(visitor.db, 'rooms', id, 'messages', idea.lastChatMessageId)));
-  await api.requestToJoin(bob, personB, id);
+  await legacyRequest(bob, personB, id);
   await api.decideRequest(alice, id, 'bob', true);
   assert.equal((await getDoc(doc(visitor.db, 'ideas', id))).data().participantCount, 2);
   await api.sendMessage(bob, personB, id, '같이 해볼 일을 정해요');
@@ -243,7 +252,7 @@ test('작성자는 글과 방 제목을 함께 수정하며 보탬·관심·참�
   await api.pinIdea(alice, id);
   await api.addContribution(bob, personB, id, { kind: '제안', text: '함께 남긴 보탬' });
   await api.toggleInterest(bob, 'bob', id);
-  await api.requestToJoin(bob, personB, id); await api.decideRequest(alice, id, 'bob', true);
+  await legacyRequest(bob, personB, id); await api.decideRequest(alice, id, 'bob', true);
   await api.sendMessage(bob, personB, id, '함께 남긴 대화');
   const ref = doc(alice.db, 'ideas', id), original = api.row(await getDoc(ref));
   const roomBefore = (await getDoc(doc(alice.db, 'rooms', id))).data();
@@ -268,7 +277,7 @@ test('같은 닉네임·참여자·운영자도 남의 글을 수정하거나 �
   const ref = doc(alice.db, 'ideas', id), original = api.row(await getDoc(ref));
   await updateDoc(doc(bob.db, 'profiles', 'bob'), { displayName: personA.name });
   await env.withSecurityRulesDisabled(context => setDoc(doc(context.firestore(), 'moderators', 'bob'), { canPin: true }));
-  await api.requestToJoin(bob, { uid: 'bob', name: personA.name }, id); await api.decideRequest(alice, id, 'bob', true);
+  await legacyRequest(bob, { uid: 'bob', name: personA.name }, id); await api.decideRequest(alice, id, 'bob', true);
   for (const other of [bob, visitor]) {
     await assertFails(updateDoc(doc(other.db, 'ideas', id), { body: '사칭', updatedAt: serverTimestamp() }));
     await assertFails(api.updateIdea(other, 'alice', original, { title: original.title, body: '사칭', topic: original.topic }));

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, connectAuthEmulator, GoogleAuthProvider, linkWithCredential, signInWithCredential } from 'firebase/auth';
-import { getFirestore, connectFirestoreEmulator, doc, getDoc, setDoc, collection, getDocs, query, limit, terminate } from 'firebase/firestore';
+import { getFirestore, connectFirestoreEmulator, doc, getDoc, setDoc, collection, getDocs, query, limit, terminate, Timestamp } from 'firebase/firestore';
 import { initializeTestEnvironment, assertFails } from '@firebase/rules-unit-testing';
 import * as api from '../src/data.js';
 
@@ -29,6 +29,7 @@ test('익명 계정에 Google을 연결하면 다른 기기에서도 닉네임·
   linkedUID = joined.user.uid;
   const person = { uid: linkedUID, name: joined.profile.displayName };
   ideaId = await api.createIdea(first, person, { title: '기기 간 연결 확인', body: '기존 글 유지', topic: '나의 다음 일' });
+  await env.withSecurityRulesDisabled(ctx => setDoc(doc(ctx.firestore(), 'rooms', ideaId), { ownerId: linkedUID, title: '기기 간 연결 확인', memberIds: [linkedUID], createdAt: Timestamp.now(), lastAddedId: '' }));
   await api.sendMessage(first, person, ideaId, '기존 비공개 대화');
   await env.withSecurityRulesDisabled(ctx => setDoc(doc(ctx.firestore(), 'moderators', linkedUID), { canPin: true }));
   assert.throws(() => api.leaveAccount(first), /먼저 Google/);

@@ -2,7 +2,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInAnonymously, connectAuthEmulator, GoogleAuthProvider, linkWithPopup, signInWithPopup, signOut } from 'firebase/auth';
 import {
   getFirestore, connectFirestoreEmulator, collection, doc, getDoc, getDocs,
-  setDoc, query, where, orderBy, limit, startAfter, onSnapshot,
+  setDoc, updateDoc, query, where, orderBy, limit, startAfter, onSnapshot,
   serverTimestamp, writeBatch, runTransaction, increment, arrayUnion, documentId,
 } from 'firebase/firestore';
 
@@ -45,6 +45,7 @@ export const watchCommunity = (store, callback, failure) => onSnapshot(
 export const pinIdea = (store, id) => setDoc(doc(store.db, 'settings', 'community'), {
   pinnedIdeaId: id, updatedAt: serverTimestamp(),
 });
+export const setNotice = (store, id, notice) => updateDoc(doc(store.db, 'ideas', id), { postType: notice ? 'notice' : 'idea' });
 export async function getProfile(store, uid) {
   const snapshot = await getDoc(doc(store.db, 'profiles', uid));
   return snapshot.exists() ? row(snapshot) : null;
@@ -86,9 +87,7 @@ export async function createIdea(store, person, { title, body, topic }) {
     createdAt: serverTimestamp(), lastActivityAt: serverTimestamp(),
     interestCount: 0, contributionCount: 0, lastContributionId: '',
     participantCount: 1, lastChatAt: null, lastChatMessageId: '',
-  });
-  batch.set(doc(store.db, 'rooms', ref.id), {
-    ownerId: person.uid, title, memberIds: [person.uid], createdAt: serverTimestamp(), lastAddedId: '',
+    postType: 'idea', refinementCount: 0, lastRefinementId: '',
   });
   await batch.commit();
   return ref.id;
@@ -105,19 +104,36 @@ export async function updateIdea(store, uid, original, { title, body, topic }) {
       throw new Error('다른 화면에서 먼저 수정된 글이에요. 입력한 내용을 복사한 뒤, 닫고 최신 글에서 다시 수정해주세요.');
     }
     if (current.title === title && current.body === body && current.topic === topic) return;
+    const room = current.title !== title ? await transaction.get(doc(store.db, 'rooms', original.id)) : null;
     transaction.update(ref, { title, body, topic, updatedAt: serverTimestamp() });
-    if (current.title !== title) transaction.update(doc(store.db, 'rooms', original.id), { title });
+    if (room?.exists()) transaction.update(doc(store.db, 'rooms', original.id), { title });
   });
   return row(await getDoc(ref));
 }
-export async function addContribution(store, person, id, { kind, text }) {
+export async function addContribution(store, person, id, { kind, text, refinementId = '', replyTo = '' }) {
   const parent = doc(store.db, 'ideas', id);
   const ref = doc(collection(parent, 'contributions'));
   const batch = writeBatch(store.db);
-  batch.set(ref, { kind, text, authorId: person.uid, authorName: person.name, createdAt: serverTimestamp() });
+  batch.set(ref, { kind, text, refinementId, replyTo, authorId: person.uid, authorName: person.name, createdAt: serverTimestamp() });
   batch.set(doc(parent, 'activities', `c_${ref.id}`), { type: 'contribution', refId: ref.id, actorId: person.uid, createdAt: serverTimestamp() });
   batch.update(parent, { contributionCount: increment(1), lastContributionId: ref.id, lastActivityAt: serverTimestamp() });
   await batch.commit();
+}
+export const getContribution = async (store, id, cid) => {
+  const snapshot = await getDoc(doc(store.db, 'ideas', id, 'contributions', cid));
+  return snapshot.exists() ? row(snapshot) : null;
+};
+export function watchRefinements(store, id, callback, failure) {
+  return watchPages(collection(store.db, 'ideas', id, 'refinements'), [], callback, failure);
+}
+export async function addRefinement(store, person, id, { title, audience, firstStep, sourceContributionId = '' }) {
+  const parent = doc(store.db, 'ideas', id), ref = doc(collection(parent, 'refinements'));
+  const batch = writeBatch(store.db);
+  batch.set(ref, { title, audience, firstStep, sourceContributionId, authorId: person.uid, authorName: person.name, createdAt: serverTimestamp() });
+  batch.set(doc(parent, 'activities', `r_${ref.id}`), { type: 'refinement', refId: ref.id, actorId: person.uid, createdAt: serverTimestamp() });
+  batch.update(parent, { refinementCount: increment(1), lastRefinementId: ref.id, lastActivityAt: serverTimestamp() });
+  await batch.commit();
+  return ref.id;
 }
 export async function readInterest(store, uid, id) {
   return (await getDoc(doc(store.db, 'ideas', id, 'interests', uid))).exists();

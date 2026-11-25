@@ -52,7 +52,10 @@ service cloud.firestore {
       allow get: if true;
       allow list: if bounded(20);
       allow create: if named(request.resource.data)
-        && request.resource.data.keys().hasOnly(['title', 'body', 'topic', 'authorId', 'authorName', 'createdAt', 'lastActivityAt', 'interestCount', 'contributionCount', 'lastContributionId', 'participantCount', 'lastChatAt', 'lastChatMessageId'])
+        && request.resource.data.keys().hasOnly(['title', 'body', 'topic', 'authorId', 'authorName', 'createdAt', 'lastActivityAt', 'interestCount', 'contributionCount', 'lastContributionId', 'participantCount', 'lastChatAt', 'lastChatMessageId', 'postType', 'refinementCount', 'lastRefinementId'])
+        && request.resource.data.get('postType', 'idea') == 'idea'
+        && request.resource.data.get('refinementCount', 0) == 0
+        && request.resource.data.get('lastRefinementId', '') == ''
         && request.resource.data.title is string && request.resource.data.title.size() >= 1 && request.resource.data.title.size() <= 100
         && request.resource.data.body is string && request.resource.data.body.size() <= 2000
         && request.resource.data.topic in ['나의 다음 일', '아이의 내일', '생활 속 생각', '엉뚱한 상상']
@@ -73,7 +76,23 @@ service cloud.firestore {
           && next.body is string && next.body.size() <= 2000
           && next.topic in ['나의 다음 일', '아이의 내일', '생활 속 생각', '엉뚱한 상상']
           && next.updatedAt == request.time
-          && (next.title == resource.data.title || getAfter(roomPath(id)).data.title == next.title);
+          && (next.title == resource.data.title || !exists(roomPath(id)) || getAfter(roomPath(id)).data.title == next.title);
+      }
+      function noticeChange() {
+        return canPin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['postType'])
+          && request.resource.data.postType in ['idea', 'notice'];
+      }
+      function refinementChange() {
+        let next = request.resource.data;
+        let path = /databases/$(database)/documents/ideas/$(id)/refinements/$(next.lastRefinementId);
+        let event = /databases/$(database)/documents/ideas/$(id)/activities/$('r_' + next.lastRefinementId);
+        return resource.data.get('postType', 'idea') != 'notice'
+          && next.diff(resource.data).affectedKeys().hasOnly(['refinementCount', 'lastRefinementId', 'lastActivityAt'])
+          && next.lastRefinementId is string && next.lastRefinementId.size() > 0
+          && next.refinementCount == resource.data.get('refinementCount', 0) + 1
+          && next.lastActivityAt == request.time
+          && !exists(path) && getAfter(path).data.authorId == request.auth.uid
+          && getAfter(path).data.createdAt == request.time && getAfter(event).data.createdAt == request.time;
       }
       function interestChange() {
         let path = /databases/$(database)/documents/ideas/$(id)/interests/$(request.auth.uid);
@@ -116,7 +135,7 @@ service cloud.firestore {
           && next.lastChatAt == message.data.createdAt
           && (resource.data.get('lastChatAt', null) == null || next.lastChatAt >= resource.data.lastChatAt);
       }
-      allow update: if signedIn() && (contentChange() || interestChange() || contributionChange() || participantChange() || discussionChange());
+      allow update: if signedIn() && (contentChange() || noticeChange() || refinementChange() || interestChange() || contributionChange() || participantChange() || discussionChange());
       allow delete: if false;
 
       match /interests/{uid} {
@@ -130,15 +149,42 @@ service cloud.firestore {
           && getAfter(ideaPath(id)).data.interestCount == get(ideaPath(id)).data.interestCount - 1;
       }
       match /contributions/{cid} {
+        function contextValid(data) {
+          let refinementId = data.get('refinementId', '');
+          let replyTo = data.get('replyTo', '');
+          return refinementId is string && refinementId.size() <= 128
+            && replyTo is string && replyTo.size() <= 128
+            && (refinementId == '' || exists(/databases/$(database)/documents/ideas/$(id)/refinements/$(refinementId)))
+            && (replyTo == '' || (replyTo != cid
+              && exists(/databases/$(database)/documents/ideas/$(id)/contributions/$(replyTo))
+              && get(/databases/$(database)/documents/ideas/$(id)/contributions/$(replyTo)).data.get('refinementId', '') == refinementId));
+        }
         allow get: if true;
         allow list: if bounded(50);
         allow create: if named(request.resource.data)
-          && request.resource.data.keys().hasOnly(['authorId', 'authorName', 'kind', 'text', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['authorId', 'authorName', 'kind', 'text', 'createdAt', 'refinementId', 'replyTo'])
+          && contextValid(request.resource.data)
           && request.resource.data.kind in ['경험', '질문', '제안']
           && request.resource.data.text is string && request.resource.data.text.size() >= 1 && request.resource.data.text.size() <= 1200
           && request.resource.data.createdAt == request.time
           && getAfter(ideaPath(id)).data.lastContributionId == cid
           && getAfter(ideaPath(id)).data.contributionCount == get(ideaPath(id)).data.contributionCount + 1;
+        allow update, delete: if false;
+      }
+      match /refinements/{rid} {
+        allow get: if true;
+        allow list: if bounded(20);
+        allow create: if named(request.resource.data)
+          && get(ideaPath(id)).data.get('postType', 'idea') != 'notice'
+          && request.resource.data.keys().hasOnly(['title', 'audience', 'firstStep', 'sourceContributionId', 'authorId', 'authorName', 'createdAt'])
+          && request.resource.data.title is string && request.resource.data.title.size() >= 1 && request.resource.data.title.size() <= 100
+          && request.resource.data.audience is string && request.resource.data.audience.size() >= 1 && request.resource.data.audience.size() <= 600
+          && request.resource.data.firstStep is string && request.resource.data.firstStep.size() >= 1 && request.resource.data.firstStep.size() <= 800
+          && request.resource.data.sourceContributionId is string && request.resource.data.sourceContributionId.size() <= 128
+          && (request.resource.data.sourceContributionId == '' || exists(/databases/$(database)/documents/ideas/$(id)/contributions/$(request.resource.data.sourceContributionId)))
+          && request.resource.data.createdAt == request.time
+          && getAfter(ideaPath(id)).data.lastRefinementId == rid
+          && getAfter(ideaPath(id)).data.refinementCount == get(ideaPath(id)).data.get('refinementCount', 0) + 1;
         allow update, delete: if false;
       }
       match /activities/{aid} {
@@ -156,17 +202,17 @@ service cloud.firestore {
             || (request.resource.data.type == 'contribution' && aid == 'c_' + request.resource.data.refId
               && getAfter(/databases/$(database)/documents/ideas/$(id)/contributions/$(request.resource.data.refId)).data.authorId == request.auth.uid
               && getAfter(/databases/$(database)/documents/ideas/$(id)/contributions/$(request.resource.data.refId)).data.createdAt == request.time)
+            || (request.resource.data.type == 'refinement' && aid == 'r_' + request.resource.data.refId
+              && getAfter(/databases/$(database)/documents/ideas/$(id)/refinements/$(request.resource.data.refId)).data.authorId == request.auth.uid
+              && getAfter(/databases/$(database)/documents/ideas/$(id)/refinements/$(request.resource.data.refId)).data.createdAt == request.time)
           );
         allow update, delete: if false;
       }
       match /requests/{uid} {
         allow get: if signedIn() && (request.auth.uid == uid || owner(id));
         allow list: if owner(id) && bounded(20);
-        allow create: if signedIn() && request.auth.uid == uid && !owner(id)
-          && !(uid in get(roomPath(id)).data.memberIds)
-          && request.resource.data.keys().hasOnly(['authorId', 'authorName', 'status', 'createdAt', 'decidedAt'])
-          && named(request.resource.data) && request.resource.data.status == 'pending'
-          && request.resource.data.createdAt == request.time && request.resource.data.decidedAt == null;
+        // New discussion happens publicly; previously submitted requests remain private.
+        allow create: if false;
         allow update: if owner(id) && resource.data.status == 'pending'
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'decidedAt'])
           && request.resource.data.decidedAt == request.time
@@ -177,15 +223,10 @@ service cloud.firestore {
     }
 
     match /rooms/{id} {
-      allow get: if signedIn() && request.auth.uid in resource.data.memberIds;
+      // Owners may check that a new public thought has no room. Existing rooms stay member-only.
+      allow get: if (owner(id) && !exists(roomPath(id))) || (signedIn() && request.auth.uid in resource.data.memberIds);
       allow list: if signedIn() && request.auth.uid in resource.data.memberIds && bounded(20);
-      allow create: if signedIn()
-        && request.resource.data.keys().hasOnly(['ownerId', 'title', 'memberIds', 'createdAt', 'lastAddedId'])
-        && request.resource.data.ownerId == request.auth.uid
-        && getAfter(ideaPath(id)).data.authorId == request.auth.uid
-        && request.resource.data.title == getAfter(ideaPath(id)).data.title
-        && request.resource.data.memberIds == [request.auth.uid]
-        && request.resource.data.createdAt == request.time && request.resource.data.lastAddedId == '';
+      allow create: if false;
       // Renaming a thought also renames its existing room; membership stays unchanged.
       allow update: if signedIn() && resource.data.ownerId == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title'])

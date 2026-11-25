@@ -15,8 +15,9 @@
       <button data-view="home" aria-pressed="true">둘러보기</button>
       <button data-view="write" aria-pressed="false">생각올리기</button>
       <button data-view="contribute" aria-pressed="false">보태기</button>
-      <button data-view="chat" aria-pressed="false" id="chat-nav">함께하기<span id="request-badge" class="sg-request-badge" hidden></span></button>
+      <button data-view="refine" aria-pressed="false">구체화하기</button>
     </nav>
+    <button class="sg-button sg-legacy-link" data-view="chat" id="legacy-chat-button" hidden>기존 비공개 대화<span id="request-badge" class="sg-request-badge" hidden></span></button>
     <button class="sg-button sg-profile" id="profile-button">시작하기 · 로그인</button>
   </header>
   <main class="sg-body">
@@ -34,7 +35,8 @@
       <div class="sg-layout">
         <div class="sg-feed-column"><div class="sg-feed-heading"><h2>지금 오가는 생각</h2><span class="sg-caption">최신 생각부터</span></div><div class="sg-feed" id="feed"></div><button id="more-ideas" class="sg-button sg-more" hidden>생각 더 보기</button></div>
         <aside class="sg-side">
-          <section class="sg-side-card"><h3>내가 함께하는 대화</h3><div id="home-rooms"></div></section>
+          <section class="sg-side-card" id="legacy-rooms" hidden><h3>기존 비공개 대화</h3><p class="sg-caption">참여자들만 이어서 볼 수 있어요.</p><div id="home-rooms"></div><button class="sg-button sg-action-link" data-view="chat">비공개 대화 모두 보기</button></section>
+          <section class="sg-side-note"><h3>생각을 한 걸음 더</h3><p>무엇을 해볼지, 누구에게 도움이 될지, 처음 할 작은 일을 함께 정리해요.</p><button class="sg-button sg-action-link" data-view="refine">구체화할 생각 고르기</button></section>
           <section class="sg-side-note"><h3>잘 다듬어진 생각이 아니어도</h3><p>꿈에서 본 장면, 생활 속 불편,<br>혼자 품었던 고민도 좋아요.</p><button class="sg-button sg-action-link" data-view="contribute">다른 생각에 보태기</button></section>
           <p class="sg-caption">그래프는 최근 활동의 흐름이에요.<br>조용해져도 쌓인 보탬은 남아요.</p>
         </aside>
@@ -46,7 +48,7 @@
         <div class="sg-field"><label for="idea-title">생각 한 줄</label><input id="idea-title" name="title" maxlength="100" placeholder="이런 게 있으면 어떨까?" required></div>
         <div class="sg-field"><label for="idea-topic">어떤 이야기인가요?</label><select id="idea-topic" name="topic"><option>나의 다음 일</option><option>아이의 내일</option><option>생활 속 생각</option><option>엉뚱한 상상</option></select></div>
         <div class="sg-field"><label for="idea-body">조금 더 들려주세요</label><textarea id="idea-body" name="body" maxlength="2000" placeholder="왜 떠올랐는지, 어떤 경험이 있었는지 궁금해요."></textarea></div>
-        <p class="sg-caption">글과 보탬은 누구나 볼 수 있어요. 연락처 등 개인적인 이야기는 함께하는 대화에서 나눠주세요.</p>
+        <p class="sg-caption">글과 보탬, 구체화안은 누구나 볼 수 있어요. 개인 연락처 등 공개하고 싶지 않은 내용은 적지 말아주세요.</p>
         <div><button type="submit" class="sg-button sg-primary">생각 올리기</button></div>
       </form>
     </section>
@@ -54,27 +56,37 @@
       <div class="sg-intro"><span class="sg-eyebrow">보태기 · 올라온 생각에 이어서</span><h1>어떤 생각에 보태고 싶으세요?</h1><p>생각 하나를 고르면 원래 글과 다른 사람들의 보탬을 함께 볼 수 있어요.</p></div>
       <div id="contribute-list" class="sg-feed"></div><button id="more-contribute" class="sg-button sg-more" hidden>생각 더 보기</button>
     </section>
+    <section data-panel="refine" hidden>
+      <div class="sg-intro"><span class="sg-eyebrow">구체화하기 · 공개로 이어가는 생각</span><h1>이 생각, 어떻게 해볼까요?</h1><p>원래 생각과 보탬에서 출발해 해볼 일을 정리해요.<br>구체화안도 누구나 읽고 다시 보탤 수 있어요. 참여 승인은 필요 없어요.</p></div>
+      <div id="refine-list" class="sg-feed"></div><button id="more-refine" class="sg-button sg-more" hidden>생각 더 보기</button>
+    </section>
     <section data-panel="detail" hidden>
       <button class="sg-button sg-back" data-view="contribute">다른 생각 고르기</button>
       <article class="sg-card" id="idea-detail">
         <div class="sg-original"><div class="sg-meta" id="detail-meta"></div><h1 id="detail-title"></h1><p class="sg-copy" id="detail-body"></p><div class="sg-actions" id="detail-actions"></div></div>
         <div id="detail-together"></div>
         <section id="join-requests" hidden><h2>함께하고 싶은 사람들</h2><div id="request-list"></div></section>
-        <div class="sg-thread-label"><h2>이 생각에 보태진 이야기</h2><span class="sg-tag" id="comment-count"></span></div>
+        <section id="refinement-section" aria-labelledby="refinement-heading">
+          <div class="sg-thread-label"><h2 id="refinement-heading" tabindex="-1">이 생각에서 나온 구체화안</h2><button id="new-refinement" class="sg-button sg-primary">새 구체화안 적기</button></div>
+          <p class="sg-caption">원래 생각과 보탬은 계속 이어져요. 서로 다른 구체화안도 제안할 수 있어요.</p>
+          <p id="refinement-status" class="sg-status" role="status"></p><div id="refinements"></div>
+        </section>
+        <div class="sg-thread-label"><h2 id="comments-heading">공개로 이어가는 이야기</h2><span class="sg-tag" id="comment-count"></span></div>
         <button class="sg-button sg-more" id="older-comments" hidden>이전 보탬 보기</button><div id="comments"></div>
         <form class="sg-comment-form" id="comment-form">
           <label for="comment-input">이 생각에 무엇을 보태고 싶나요?</label>
+          <div id="comment-context" class="sg-comment-context" hidden><span id="comment-context-label"></span><button type="button" id="clear-comment-context" class="sg-button">원래 생각에 보태기</button></div>
           <div class="sg-kinds" role="group" aria-label="보탬 종류"><button type="button" class="sg-button" data-kind="경험" aria-pressed="true">경험</button><button type="button" class="sg-button" data-kind="질문" aria-pressed="false">질문</button><button type="button" class="sg-button" data-kind="제안" aria-pressed="false">제안</button></div>
           <textarea id="comment-input" maxlength="1200" required placeholder="이 생각과 관련해서 저는 이런 경험이 있어요…"></textarea>
-          <button class="sg-button sg-primary" type="submit">이 생각에 보태기</button>
+          <p class="sg-caption">이 이야기는 누구나 읽고 이어서 보탤 수 있어요.</p><button class="sg-button sg-primary" type="submit">이 생각에 보태기</button>
         </form>
       </article>
     </section>
     <section data-panel="chat" hidden>
-      <div class="sg-section-top"><div><h1>함께하기</h1><p class="sg-caption">보탠 생각에서 한 걸음 더. 주제를 좁히고, 해볼 일을 함께 찾아요.</p></div><span class="sg-caption">참여자에게만 열린 대화</span></div>
+      <div class="sg-section-top"><div><h1>기존 비공개 대화</h1><p class="sg-caption">기존 대화와 참여자는 그대로예요. 새로운 생각은 보태기와 구체화하기에서 공개로 이어가요.</p></div><button class="sg-button" data-view="refine">구체화하기로 가기</button></div>
       <section id="request-inbox" class="sg-request-inbox" aria-labelledby="request-inbox-title" hidden>
-        <h2 id="request-inbox-title">함께하고 싶은 사람들</h2>
-        <p class="sg-caption">내 글에 들어온 신청이에요. 수락하면 이 생각의 기존 대화에 참여할 수 있어요.</p>
+        <h2 id="request-inbox-title">이전에 받은 참여 신청</h2>
+        <p class="sg-caption">공개 구체화로 바뀌기 전에 받은 신청이에요. 수락하면 기존 비공개 대화에 참여할 수 있어요.</p>
         <div id="inbox-list"></div>
       </section>
       <p id="request-result" class="sg-status" role="status"></p>
@@ -83,6 +95,17 @@
     <p class="sg-status" id="status" role="status" aria-live="polite"></p>
   </main>
   <footer class="sg-footer"><span>생각 거래소</span><span>작은 생각이 함께할 사람을 만나는 곳.</span></footer>
+  <dialog id="refinement-dialog" aria-labelledby="refinement-dialog-title">
+    <form id="refinement-form" class="sg-form">
+      <div><h2 id="refinement-dialog-title">생각을 구체화해보기</h2><p id="refinement-origin" class="sg-caption"></p><p class="sg-caption">이 구체화안은 누구나 읽고 보탤 수 있어요.</p></div>
+      <div class="sg-field"><label for="refinement-title">무엇을 해볼까요?</label><input id="refinement-title" maxlength="100" required placeholder="부모와 아이가 교과서 속 개념을 AI로 만들어보는 모임"></div>
+      <div class="sg-field"><label for="refinement-audience">누구에게 도움이 되나요?</label><textarea id="refinement-audience" maxlength="600" required placeholder="아이와 함께 미래를 준비할 방법을 찾는 부모에게"></textarea></div>
+      <div class="sg-field"><label for="refinement-step">처음 해볼 작은 일은요?</label><textarea id="refinement-step" maxlength="800" required placeholder="세 가족이 주말에 한 번 해보고, 경험을 공유해요"></textarea></div>
+      <div class="sg-field"><label for="refinement-source">어떤 보탬에서 이어졌나요? (선택)</label><select id="refinement-source"><option value="">원래 생각에서 시작</option></select></div>
+      <p id="refinement-error" class="sg-error" role="alert"></p>
+      <div class="sg-actions"><button id="refinement-cancel" class="sg-button" type="button">취소</button><button class="sg-button sg-primary" type="submit">구체화안 공개하기</button></div>
+    </form>
+  </dialog>
   <dialog id="edit-idea-dialog" aria-labelledby="edit-idea-heading">
     <form id="edit-idea-form" class="sg-form">
       <div><h2 id="edit-idea-heading">내 생각 수정하기</h2><p class="sg-caption">다른 사람이 보탠 내용과 함께하는 대화는 그대로 이어져요.</p></div>

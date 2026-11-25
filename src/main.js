@@ -7,10 +7,13 @@ const root = $('#sg-community');
 let store, user, profile, currentIdea, selectedRoom;
 let view = 'home', selectedId = '', kind = '경험', feedRows = [], extraRows = [], rooms = [];
 let cursor, hasMore = false, recentComments = [], previousComments = [], recentMessages = [], previousMessages = [];
-let stopFeed, stopRooms, stopIdea, stopComments, stopMessages, stopInbox;
+let stopFeed, stopRooms, stopIdea, stopComments, stopMessages, stopInbox, stopRefinements;
 let identityReady = Promise.resolve(), guestResolve, guestPromise;
 let identityVersion = 0, activeUid = '', authBusy = false;
 let editingIdea = null, editBusy = false;
+let refinementRows = [], refiningIdea = null, refinementBusy = false, detailVersion = 0;
+let commentContext = { refinementId: '', replyTo: '' };
+const contributionReferences = new Map();
 const interestState = new Map(), activityCache = new Map();
 const syncedDiscussions = new Map();
 let requestVersion = 0, requestGroups = [];
@@ -66,8 +69,8 @@ function empty(title, description, action) {
   return box;
 }
 function stopDetail() {
-  [stopIdea, stopComments].forEach(stop => stop?.());
-  stopIdea = stopComments = undefined;
+  [stopIdea, stopComments, stopRefinements].forEach(stop => stop?.());
+  stopIdea = stopComments = stopRefinements = undefined; detailVersion++;
 }
 function stopChat() { stopMessages?.(); stopMessages = undefined; }
 function displayView(name) {
@@ -75,7 +78,7 @@ function displayView(name) {
   document.querySelectorAll('[data-panel]').forEach(panel => panel.hidden = panel.dataset.panel !== name);
   document.querySelectorAll('.sg-nav [data-view]').forEach(nav => nav.setAttribute('aria-pressed', String(nav.dataset.view === (name === 'detail' ? 'contribute' : name))));
   showStatus('');
-  if (!['home', 'contribute'].includes(name)) { stopFeed?.(); stopFeed = undefined; }
+  if (!['home', 'contribute', 'refine'].includes(name)) { stopFeed?.(); stopFeed = undefined; }
   else startFeed();
   if (name !== 'detail') stopDetail();
   if (name !== 'chat') stopChat();
@@ -84,7 +87,7 @@ function displayView(name) {
   window.scrollTo({ top: 0, behavior: 'instant' });
 }
 function navigate(name, updateHash = true) {
-  if (!['home', 'write', 'contribute', 'chat'].includes(name)) name = 'home';
+  if (!['home', 'write', 'contribute', 'refine', 'chat'].includes(name)) name = 'home';
   displayView(name);
   if (updateHash) history.replaceState(null, '', `#${name}`);
 }
@@ -192,6 +195,7 @@ async function setIdentity(next) {
   user = next; profile = null;
   if (activeUid !== (next?.uid || '')) {
     closeIdeaEditor(true);
+    closeRefinementEditor(true);
     activeUid = next?.uid || '';
     stopRooms?.(); stopRooms = undefined; stopModerator?.(); stopModerator = undefined;
     stopInbox?.(); stopInbox = undefined; requestVersion++; requestGroups = []; decidingRequests.clear();
@@ -220,14 +224,24 @@ function startFeed() {
 function feedIdeas() { return [...new Map([...feedRows, ...extraRows].map(idea => [idea.id, idea])).values()]; }
 function renderFeed() {
   const ideas = feedIdeas();
-  for (const [selector, compact] of [['#feed', false], ['#contribute-list', true]]) {
+  for (const [selector, compact] of [['#feed', false], ['#contribute-list', true], ['#refine-list', true]]) {
     const list = $(selector); list.replaceChildren();
+    if (selector === '#refine-list') {
+      const choices = ideas.filter(idea => idea.postType !== 'notice');
+      if (!choices.length) list.append(empty('구체화할 생각을 기다리고 있어요.', '먼저 생각을 올리거나 다른 사람의 생각에 보태보세요.', true));
+      choices.forEach(idea => {
+        const card = el('article', 'sg-card');
+        const title = el('h2'); title.append(button(idea.title, () => openIdea(idea.id), 'sg-title-link'));
+        card.append(el('p', 'sg-caption', `${idea.authorName} · 보탬 ${idea.contributionCount}개`), title, refinementCard(idea)); list.append(card);
+      });
+      continue;
+    }
     const pinned = compact ? null : pinnedIdea || ideas.find(idea => idea.id === pinnedId);
     if (pinned) list.append(ideaCard(pinned, false));
     if (!ideas.length && !pinned) list.append(empty('첫 생각을 기다리고 있어요.', '아직 글이 없어요. 떠오른 생각을 한 줄 남겨주세요.', true));
     ideas.filter(idea => idea.id !== pinned?.id).forEach(idea => list.append(ideaCard(idea, compact)));
   }
-  $('#more-ideas').hidden = $('#more-contribute').hidden = !hasMore;
+  $('#more-ideas').hidden = $('#more-contribute').hidden = $('#more-refine').hidden = !hasMore;
 }
 async function loadMoreIdeas() {
   if (!cursor || !store) return;
@@ -236,8 +250,9 @@ async function loadMoreIdeas() {
 }
 $('#more-ideas').addEventListener('click', () => run($('#more-ideas'), loadMoreIdeas));
 $('#more-contribute').addEventListener('click', () => run($('#more-contribute'), loadMoreIdeas));
+$('#more-refine').addEventListener('click', () => run($('#more-refine'), loadMoreIdeas));
 
-function actionsFor(idea, compact = false) {
+function actionsFor(idea, compact = false, manage = false) {
   const actions = el('div', 'sg-actions');
   if (!compact) {
     const interested = interestState.get(idea.id) === true;
@@ -252,46 +267,40 @@ function actionsFor(idea, compact = false) {
   }
   actions.append(button(`보태기 ${idea.contributionCount}`, () => openIdea(idea.id)));
   const pending = requestGroups.find(group => group.id === idea.id)?.requests.length || 0;
-  if (user?.uid === idea.authorId && pending) actions.append(button(`참여 신청 ${pending}건`, () => navigate('chat'), 'sg-button sg-request-link'));
+  if (idea.postType !== 'notice' && user?.uid === idea.authorId && pending) actions.append(button(`이전 참여 신청 ${pending}건`, () => navigate('chat'), 'sg-button sg-request-link'));
   if (profile && user?.uid === idea.authorId) actions.append(button('수정하기', () => openIdeaEditor(idea)));
   if (canPin) actions.append(button(idea.id === pinnedId ? '고정 해제' : '상단 고정', async () => {
     const clear = idea.id === pinnedId;
     await api.pinIdea(store, clear ? '' : idea.id);
     showStatus(clear ? '상단 고정을 해제했어요.' : '둘러보기 맨 위에 고정했어요. 고정 글은 하나만 표시돼요.');
   }, 'sg-button sg-pin-action'));
+  if (canPin && manage) actions.append(button(idea.postType === 'notice' ? '일반 글로 바꾸기' : '공지로 설정', async () => {
+    await api.setNotice(store, idea.id, idea.postType !== 'notice');
+    showStatus(idea.postType === 'notice' ? '일반 생각으로 바꿨어요.' : '공지로 설정했어요. 구체화와 모집 영역은 표시하지 않아요.');
+  }));
   return actions;
 }
-function discussionCard(idea) {
-  const mine = rooms.find(room => room.id === idea.id);
-  const count = Math.max(1, idea.participantCount || 0, mine?.memberIds.length || 0);
-  const started = Boolean(milliseconds(idea.lastChatAt));
-  const state = started ? 'started' : count > 1 ? 'ready' : 'waiting';
-  const group = el('section', `sg-discussion sg-discussion-${state}`);
-  group.setAttribute('aria-label', '이 생각의 함께하기');
+function refinementCard(idea) {
+  const count = idea.refinementCount || 0;
+  const group = el('section', `sg-discussion ${count ? 'sg-discussion-started' : 'sg-discussion-waiting'}`);
+  group.setAttribute('aria-label', '공개 구체화');
   const copy = el('div', 'sg-discussion-copy');
-  copy.append(el('span', 'sg-discussion-label', started ? '대화 시작됨' : count > 1 ? '대화 준비 중' : '함께할 사람 모집'));
-  copy.append(el('strong', 'sg-discussion-title', started
-    ? count > 1 ? `${count}명이 함께하는 대화` : '첫 이야기가 올라왔어요'
-    : count > 1 ? `${count}명이 모였어요` : '첫 대화를 함께 시작해보세요'));
-  copy.append(el('p', 'sg-discussion-description', started
-    ? `작성자 포함 ${count}명 · 최근 대화 ${when(idea.lastChatAt)}`
-    : count > 1 ? '아직 대화 전이에요. 첫 인사를 나눠보세요.' : '아직 대화 전이에요. 관심이 맞는 사람과 생각을 더 나눠봐요.'));
-  copy.append(el('p', 'sg-discussion-privacy', '대화 내용은 참여자에게만 보여요.'));
-  const action = el('div', 'sg-discussion-action');
-  action.append(button(mine ? '대화방 들어가기' : '참여 신청하기', () => joinIdea(idea), 'sg-button sg-discussion-button'));
-  action.append(el('span', 'sg-discussion-hint', mine ? '참여 중 · 바로 들어갈 수 있어요' : '글쓴이가 수락하면 참여해요'));
-  group.append(copy, action);
+  copy.append(el('span', 'sg-discussion-label', count ? '공개로 구체화 중' : '생각을 한 걸음 더'));
+  copy.append(el('strong', 'sg-discussion-title', count ? `구체화안 ${count}개가 나왔어요` : '이 생각, 어떻게 해볼까요?'));
+  copy.append(el('p', 'sg-discussion-description', '무엇을 해볼지, 누구에게 도움이 될지, 처음 할 작은 일을 함께 정리해요.'));
+  copy.append(el('p', 'sg-discussion-privacy', '누구나 읽고 보탤 수 있어요. 원래 이야기도 계속 이어져요.'));
+  group.append(copy, button(count ? '구체화안 보고 보태기' : '이 생각 구체화하기', () => openIdea(idea.id, true, 'refine'), 'sg-button sg-discussion-button'));
   return group;
 }
 function ideaCard(idea, compact) {
   const card = el('article', `sg-card${idea.id === pinnedId ? ' sg-pinned' : ''}`);
-  const meta = el('div', 'sg-meta'); meta.append(el('span', 'sg-tag', idea.topic), el('span', '', idea.authorName), el('span', '', when(idea.createdAt)));
+  const meta = el('div', 'sg-meta'); meta.append(el('span', 'sg-tag', idea.postType === 'notice' ? '공지' : idea.topic), el('span', '', idea.authorName), el('span', '', when(idea.createdAt)));
   if (idea.updatedAt) meta.append(el('span', '', `수정됨 · ${when(idea.updatedAt)}`));
   if (idea.id === pinnedId) meta.prepend(el('span', 'sg-pin-label', '상단 고정'));
-  const body = el('div', compact ? '' : 'sg-card-body'); const copy = el('div'); const heading = el('h2');
+  const body = el('div', compact || idea.postType === 'notice' ? '' : 'sg-card-body'); const copy = el('div'); const heading = el('h2');
   heading.append(button(idea.title, () => openIdea(idea.id), 'sg-title-link'));
   copy.append(heading, el('p', 'sg-copy', idea.body)); body.append(copy);
-  if (!compact) {
+  if (!compact && idea.postType !== 'notice') {
     const trend = el('section', 'sg-trend'); trend.setAttribute('aria-label', `${idea.title}의 최근 활동`);
     const head = el('div', 'sg-trend-head'); const label = activityLabel(idea);
     head.append(el('span', '', '활동 흐름 · 14일'), el('span', label === '잠시 조용해요' ? 'sg-down' : 'sg-up', label));
@@ -299,7 +308,7 @@ function ideaCard(idea, compact) {
     requestAnimationFrame(() => observeTrend(trend, idea));
   }
   card.append(meta, body, actionsFor(idea, compact));
-  if (!compact) card.append(discussionCard(idea));
+  if (!compact && idea.postType !== 'notice') card.append(refinementCard(idea));
   return card;
 }
 const observer = new IntersectionObserver(entries => entries.forEach(entry => {
@@ -310,7 +319,7 @@ const observer = new IntersectionObserver(entries => entries.forEach(entry => {
 }), { rootMargin: '120px' });
 function observeTrend(node, idea) { if (!node.isConnected) return; node._idea = idea; observer.observe(node); }
 async function paintTrend(container, idea) {
-  const key = `${idea.contributionCount}:${milliseconds(idea.lastActivityAt)}`;
+  const key = `${idea.contributionCount}:${idea.refinementCount || 0}:${milliseconds(idea.lastActivityAt)}`;
   let cache = activityCache.get(idea.id);
   if (!cache || cache.key !== key) {
     cache = { key, promise: api.loadActivity(store, idea.id) }; activityCache.set(idea.id, cache);
@@ -331,48 +340,160 @@ async function paintTrend(container, idea) {
   const note = el('span', 'sg-caption', '최근 최대 30개 활동 기준'); holder.replaceWith(svg, note);
 }
 
-async function openIdea(id, updateHash = true) {
+async function openIdea(id, updateHash = true, focus = '') {
   if (!store) return;
   stopDetail(); stopChat(); selectedId = id; currentIdea = null; previousComments = []; recentComments = [];
+  const version = detailVersion;
+  refinementRows = []; contributionReferences.clear(); commentContext = { refinementId: '', replyTo: '' }; renderCommentContext();
+  $('#refinements').replaceChildren(); $('#refinement-status').textContent = '구체화안을 불러오고 있어요.';
   $('#comments').replaceChildren(); $('#detail-title').textContent = '생각을 불러오고 있어요.';
   $('#detail-body').textContent = ''; $('#detail-meta').replaceChildren(); $('#detail-actions').replaceChildren(); $('#detail-together').replaceChildren();
   $('#join-requests').hidden = true; $('#comment-count').textContent = ''; $('#comment-input').value = ''; kind = '경험'; updateKind();
   displayView('detail');
   if (updateHash) history.replaceState(null, '', `#idea/${encodeURIComponent(id)}`);
   stopIdea = api.watchIdea(store, id, idea => {
+    if (version !== detailVersion || selectedId !== id) return;
     currentIdea = idea;
     $('#connection-status').hidden = true;
     if (!idea) { $('#detail-title').textContent = '생각을 찾을 수 없어요.'; $('#comment-form').hidden = true; return; }
     $('#comment-form').hidden = false; renderDetail();
+    if (focus === 'refine' && idea.postType !== 'notice') { focus = ''; $('#refinement-heading').focus(); }
     if (user && !interestState.has(id)) {
       const uid = user.uid;
       api.readInterest(store, uid, id).then(active => { if (user?.uid !== uid) return; interestState.set(id, active); if (currentIdea?.id === id) renderDetail(); }).catch(error => { if (user?.uid === uid) showStatus(errorText(error), true); });
     }
     renderRequests();
   }, error => showStatus(errorText(error), true));
-  stopComments = api.watchContributions(store, id, (rows, more) => { recentComments = rows; $('#older-comments').hidden = !more || Boolean(previousComments.length && previousComments.length % 50); renderComments(); }, error => showStatus(errorText(error), true));
+  stopComments = api.watchContributions(store, id, (rows, more) => {
+    if (version !== detailVersion || selectedId !== id) return;
+    recentComments = rows; rows.forEach(item => contributionReferences.set(item.id, item));
+    $('#older-comments').hidden = !more || Boolean(previousComments.length && previousComments.length % 50); renderComments(); renderRefinements();
+  }, error => { if (version === detailVersion) showStatus(errorText(error), true); });
+  stopRefinements = api.watchRefinements(store, id, rows => {
+    if (version !== detailVersion || selectedId !== id) return;
+    refinementRows = rows.sort((a, b) => milliseconds(a.createdAt) - milliseconds(b.createdAt));
+    $('#refinement-status').textContent = ''; renderRefinements(); renderComments();
+  }, error => { if (version === detailVersion) $('#refinement-status').textContent = errorText(error); });
 }
 function renderDetail() {
   if (!currentIdea) return;
   const idea = currentIdea;
   $('#detail-title').textContent = idea.title; $('#detail-body').textContent = idea.body;
-  $('#detail-meta').replaceChildren(el('span', 'sg-tag', idea.topic), el('span', '', `${idea.authorName} · ${when(idea.createdAt)}`));
+  $('#detail-meta').replaceChildren(el('span', 'sg-tag', idea.postType === 'notice' ? '공지' : idea.topic), el('span', '', `${idea.authorName} · ${when(idea.createdAt)}`));
   if (idea.updatedAt) $('#detail-meta').append(el('span', '', `수정됨 · ${when(idea.updatedAt)}`));
   if (idea.id === pinnedId) $('#detail-meta').prepend(el('span', 'sg-pin-label', '상단 고정'));
-  $('#detail-actions').replaceChildren(...actionsFor(idea).children);
-  $('#detail-together').replaceChildren(discussionCard(idea));
+  $('#detail-actions').replaceChildren(...actionsFor(idea, false, true).children);
+  $('#detail-together').replaceChildren();
+  if (idea.postType !== 'notice') $('#detail-together').append(refinementCard(idea));
+  $('#refinement-section').hidden = idea.postType === 'notice' && !refinementRows.length;
+  $('#new-refinement').hidden = idea.postType === 'notice';
+  $('#comments-heading').textContent = idea.postType === 'notice' ? '공지에 남긴 의견과 질문' : '공개로 이어가는 이야기';
   $('#comment-count').textContent = `${idea.contributionCount}개`;
+  renderRefinements(); renderComments();
 }
+function contributionQuote(cid, label) {
+  if (!contributionReferences.has(cid)) {
+    contributionReferences.set(cid, null);
+    const id = selectedId, version = detailVersion;
+    api.getContribution(store, id, cid).then(value => {
+      if (id !== selectedId || version !== detailVersion) return;
+      contributionReferences.set(cid, value || { unavailable: true }); renderComments(); renderRefinements();
+    }).catch(() => {
+      if (id !== selectedId || version !== detailVersion) return;
+      contributionReferences.set(cid, { unavailable: true }); renderComments(); renderRefinements();
+    });
+  }
+  const source = contributionReferences.get(cid), quote = el('details', 'sg-source-quote');
+  quote.append(el('summary', '', source?.authorName ? `${label} · ${source.authorName}` : label));
+  quote.append(el('p', '', source?.text || (source?.unavailable ? '연결된 보탬을 불러오지 못했어요.' : '보탬을 불러오고 있어요.')));
+  return quote;
+}
+function renderRefinements() {
+  const list = $('#refinements'); list.replaceChildren();
+  $('#refinement-section').hidden = !currentIdea || (currentIdea.postType === 'notice' && !refinementRows.length);
+  if (!refinementRows.length) list.append(el('p', 'sg-empty', '아직 구체화안이 없어요. 작게 해볼 일 하나부터 적어보세요.'));
+  refinementRows.forEach(item => {
+    const card = el('article', 'sg-refinement'); card.id = `refinement-${item.id}`;
+    card.append(el('span', 'sg-tag', '공개 구체화안'), el('h3', '', item.title), el('p', 'sg-caption', `${item.authorName} · ${when(item.createdAt)}`));
+    card.append(el('h4', '', '누구에게 도움이 되나요?'), el('p', 'sg-refinement-copy', item.audience));
+    card.append(el('h4', '', '처음 해볼 작은 일'), el('p', 'sg-refinement-copy', item.firstStep));
+    if (item.sourceContributionId) card.append(contributionQuote(item.sourceContributionId, '이 안의 출발점'));
+    else card.append(el('p', 'sg-caption', `원래 생각에서 시작 · ${currentIdea?.authorName || ''}`));
+    card.append(button('이 안에 보태기', () => setCommentContext(item.id, ''), 'sg-button sg-primary'));
+    list.append(card);
+  });
+}
+function renderCommentContext() {
+  const { refinementId, replyTo } = commentContext;
+  $('#comment-context').hidden = !refinementId && !replyTo;
+  const target = refinementRows.find(item => item.id === refinementId), original = contributionReferences.get(replyTo);
+  $('#comment-context-label').textContent = replyTo ? `${original?.authorName || '이전 보탬'}님에게 답글 보태기` : `구체화안에 보태기 · ${target?.title || ''}`;
+}
+function setCommentContext(refinementId, replyTo) {
+  commentContext = { refinementId, replyTo }; renderCommentContext(); $('#comment-input').focus();
+}
+$('#clear-comment-context').addEventListener('click', () => setCommentContext('', ''));
+async function openRefinementEditor(sourceContributionId = '') {
+  if (!currentIdea || currentIdea.postType === 'notice' || refinementBusy) return;
+  const idea = currentIdea, who = await person();
+  if (!who || currentIdea?.id !== idea.id || view !== 'detail') return;
+  refiningIdea = { id: idea.id, uid: who.uid };
+  $('#refinement-form').reset(); $('#refinement-error').textContent = '';
+  $('#refinement-origin').textContent = `원래 생각: ${idea.title}`;
+  const select = $('#refinement-source'); select.replaceChildren(new Option('원래 생각에서 시작', ''));
+  merged(previousComments, recentComments).forEach(item => select.add(new Option(`${item.authorName} · ${item.text.slice(0, 70)}`, item.id)));
+  select.value = sourceContributionId;
+  $('#refinement-dialog').showModal(); $('#refinement-title').focus();
+}
+function closeRefinementEditor(force = false) {
+  if (refinementBusy && !force) return;
+  $('#refinement-dialog').close(); refiningIdea = null; $('#refinement-form').reset(); $('#refinement-error').textContent = '';
+}
+$('#new-refinement').addEventListener('click', () => run($('#new-refinement'), () => openRefinementEditor()));
+$('#refinement-cancel').addEventListener('click', () => closeRefinementEditor());
+$('#refinement-dialog').addEventListener('cancel', event => { event.preventDefault(); closeRefinementEditor(); });
+$('#refinement-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!refiningIdea || refinementBusy) return;
+  const original = refiningIdea;
+  const values = { title: $('#refinement-title').value.trim(), audience: $('#refinement-audience').value.trim(), firstStep: $('#refinement-step').value.trim(), sourceContributionId: $('#refinement-source').value };
+  if (!values.title || !values.audience || !values.firstStep) { $('#refinement-error').textContent = '세 가지 내용을 짧게라도 적어주세요.'; return; }
+  if (!user || !profile || user.uid !== original.uid) { closeRefinementEditor(); return; }
+  refinementBusy = true;
+  const controls = Array.from($('#refinement-form').querySelectorAll('input, textarea, select, button')); controls.forEach(item => item.disabled = true);
+  try {
+    await api.addRefinement(store, { uid: user.uid, name: profile.displayName }, original.id, values);
+    if (user?.uid !== original.uid || refiningIdea !== original) return;
+    closeRefinementEditor(true); activityCache.delete(original.id);
+    $('#refinement-status').textContent = '구체화안을 공개했어요. 다른 사람도 읽고 보탤 수 있어요.';
+  } catch (error) { if (refiningIdea === original) $('#refinement-error').textContent = errorText(error); }
+  finally { refinementBusy = false; controls.forEach(item => item.disabled = false); }
+});
 function merged(oldRows, newRows) { return [...new Map([...oldRows, ...newRows].map(item => [item.id, item])).values()].sort((a, b) => milliseconds(a.createdAt) - milliseconds(b.createdAt)); }
 function renderComments() {
   const list = $('#comments'); list.replaceChildren();
   const rows = merged(previousComments, recentComments);
   if (!rows.length) list.append(el('p', 'sg-empty', '아직 보탬이 없어요. 첫 경험이나 질문을 남겨주세요.'));
-  rows.forEach(comment => { const item = el('div', 'sg-comment'); item.append(el('span', 'sg-caption', `${comment.authorName} · ${comment.kind} · ${when(comment.createdAt)}`), el('p', '', comment.text)); list.append(item); });
+  rows.forEach(comment => {
+    const item = el('div', 'sg-comment'); item.id = `contribution-${comment.id}`;
+    item.append(el('span', 'sg-caption', `${comment.authorName} · ${comment.kind} · ${when(comment.createdAt)}`));
+    if (comment.refinementId) {
+      const target = refinementRows.find(row => row.id === comment.refinementId);
+      item.append(button(`구체화안에 보탬 · ${target?.title || '구체화안 보기'}`, () => document.getElementById(`refinement-${comment.refinementId}`)?.scrollIntoView({ block: 'center' }), 'sg-button sg-action-link sg-context-link'));
+    }
+    if (comment.replyTo) item.append(contributionQuote(comment.replyTo, '답글의 원래 보탬'));
+    item.append(el('p', '', comment.text));
+    const actions = el('div', 'sg-comment-actions');
+    actions.append(button('답글 보태기', () => setCommentContext(comment.refinementId || '', comment.id), 'sg-button sg-action-link'));
+    if (currentIdea?.postType !== 'notice') actions.append(button('이 보탬에서 구체화하기', () => openRefinementEditor(comment.id), 'sg-button sg-action-link'));
+    item.append(actions); list.append(item);
+  });
 }
 $('#older-comments').addEventListener('click', () => run($('#older-comments'), async () => {
   const oldest = merged(previousComments, recentComments)[0]; if (!oldest) return;
-  const rows = await api.earlierContributions(store, selectedId, oldest); previousComments = [...rows, ...previousComments]; $('#older-comments').hidden = rows.length < 50; renderComments();
+  const id = selectedId, version = detailVersion;
+  const rows = await api.earlierContributions(store, id, oldest); if (id !== selectedId || version !== detailVersion) return;
+  previousComments = [...rows, ...previousComments]; rows.forEach(item => contributionReferences.set(item.id, item)); $('#older-comments').hidden = rows.length < 50; renderComments(); renderRefinements();
 }));
 function updateKind() { document.querySelectorAll('[data-kind]').forEach(control => control.setAttribute('aria-pressed', String(control.dataset.kind === kind))); }
 root.addEventListener('click', event => {
@@ -429,10 +550,10 @@ $('#idea-form').addEventListener('submit', event => {
 $('#comment-form').addEventListener('submit', event => {
   event.preventDefault();
   run(event.submitter, async () => {
-    const text = $('#comment-input').value.trim(), id = selectedId, selectedKind = kind; if (!text || !id) return;
+    const text = $('#comment-input').value.trim(), id = selectedId, selectedKind = kind, context = { ...commentContext }; if (!text || !id) return;
     const who = await person(); if (!who) return;
-    await api.addContribution(store, who, id, { text, kind: selectedKind });
-    if (selectedId === id) $('#comment-input').value = '';
+    await api.addContribution(store, who, id, { text, kind: selectedKind, ...context });
+    if (selectedId === id) { $('#comment-input').value = ''; commentContext = { refinementId: '', replyTo: '' }; renderCommentContext(); }
     activityCache.delete(id); showStatus('이 생각에 보탰어요.');
   });
 });
@@ -442,8 +563,9 @@ function renderRequests() {
   const count = groups.reduce((sum, group) => sum + group.requests.length, 0);
   $('#request-badge').hidden = !count;
   $('#request-badge').textContent = String(count);
-  $('#chat-nav').setAttribute('aria-label', count ? `함께하기 · 참여 신청 ${count}건` : '함께하기');
-  $('#request-notice').hidden = !count || view === 'chat';
+  $('#legacy-chat-button').hidden = !user || !profile || (!rooms.length && !count);
+  $('#legacy-chat-button').setAttribute('aria-label', count ? `기존 비공개 대화 · 이전 신청 ${count}건` : '기존 비공개 대화');
+  $('#request-notice').hidden = true;
   $('#request-notice-title').textContent = `내 생각에 함께하고 싶은 신청이 ${count}건 있어요`;
   $('#request-inbox').hidden = !count;
   const inbox = $('#inbox-list'); inbox.replaceChildren();
@@ -454,10 +576,8 @@ function renderRequests() {
     group.requests.forEach(request => section.append(requestRow(group.id, request)));
     inbox.append(section);
   }
-  const requests = view === 'detail' && currentIdea?.authorId === user?.uid
-    ? groups.find(group => group.id === currentIdea.id)?.requests || [] : [];
-  $('#join-requests').hidden = !requests.length;
-  $('#request-list').replaceChildren(...requests.map(request => requestRow(currentIdea.id, request)));
+  $('#join-requests').hidden = true;
+  $('#request-list').replaceChildren();
 }
 function requestRow(id, request) {
   const item = el('div', 'sg-request'), copy = el('div', 'sg-request-copy');
@@ -500,26 +620,19 @@ function watchOwnerRequests() {
     $('#request-error').hidden = false;
   });
 }
-async function joinIdea(idea) {
-  const who = await person(); if (!who) return;
-  const mine = rooms.find(room => room.id === idea.id);
-  if (mine) { navigate('chat'); selectRoom(mine.id); return; }
-  const request = await api.getRequest(store, idea.id, who.uid);
-  if (request) { showStatus(request.status === 'pending' ? '이미 함께하기를 신청했어요. 글쓴이가 확인하면 대화방이 열려요.' : request.status === 'accepted' ? '참여가 승인됐어요. 함께하기 메뉴에서 대화방을 확인해주세요.' : '이번 함께하기 신청은 수락되지 않았어요. 다른 생각에도 보태보세요.'); return; }
-  if (idea.authorId === who.uid) { showStatus('내 대화방을 불러오고 있어요. 잠시 후 함께하기를 눌러주세요.'); return; }
-  await api.requestToJoin(store, who, idea.id); showStatus('함께하기를 신청했어요. 글쓴이가 수락하면 대화방이 열려요.');
-}
 function renderRooms() {
   const home = $('#home-rooms'), list = $('#room-list'); home.replaceChildren(); list.replaceChildren();
+  $('#legacy-rooms').hidden = !user || !profile || !rooms.length;
+  renderRequests();
   if (!user || !profile) {
     home.append(el('p', 'sg-caption', '닉네임으로 시작하면 함께하는 대화를 볼 수 있어요.'), button('닉네임으로 시작', person));
-    $('#chat-empty').textContent = '닉네임으로 시작하고, 관심 있는 생각에 함께하기를 신청해보세요.';
+    $('#chat-empty').textContent = '기존 대화에 참여했던 계정으로 접속하면 이어서 볼 수 있어요.';
     $('#chat-empty').hidden = false; $('#chat-content').hidden = true;
     list.append(button('닉네임으로 시작', person, 'sg-button sg-primary')); return;
   }
   if (!rooms.length) {
     home.append(el('p', 'sg-caption', '아직 함께하는 대화가 없어요. 관심 있는 생각에 참여해보세요.'));
-    $('#chat-empty').textContent = '생각을 올리면 내 대화방이 생겨요. 다른 생각에는 함께하기를 신청하고 초대를 기다려주세요.';
+    $('#chat-empty').textContent = '이 계정에 연결된 기존 비공개 대화가 없어요. 새로운 이야기는 보태기와 구체화하기에서 나눠주세요.';
     $('#chat-empty').hidden = false; $('#chat-content').hidden = true; return;
   }
   rooms.forEach((room, index) => {
@@ -544,9 +657,8 @@ function selectRoom(id) {
 }
 function renderRoomContext(room) {
   const context = $('#room-context'); context.replaceChildren();
-  context.append(el('strong', '', room.memberIds.length === 1 ? '지금은 작성자 혼자 있어요. 함께할 사람을 기다려요.' : '생각을 조금 더 구체적으로, 함께 이어가요.'));
-  context.append(el('p', '', '대화를 남기면 둘러보기에 참여 인원과 최근 대화 시간이 표시돼요. 대화 내용은 이 모임 안에서만 보여요.'));
-  context.append(el('p', '', '함께 고민할 질문 하나, 작게 해볼 일 하나부터 정해보세요.'));
+  context.append(el('strong', '', '이 대화는 기존 참여자에게만 보여요.'));
+  context.append(el('p', '', '기존 대화는 공개 구체화안으로 옮겨지지 않아요. 여기에서는 계속 비공개로 이야기할 수 있어요.'));
   context.append(button('원래 생각과 보탬 보기', () => openIdea(room.id), 'sg-button sg-action-link'));
 }
 function renderMessages() {
@@ -600,7 +712,7 @@ function route() {
   else navigate(hash, false);
 }
 window.addEventListener('hashchange', route);
-document.addEventListener('visibilitychange', () => { if (document.hidden) { stopFeed?.(); stopFeed = undefined; } else if (['home', 'contribute'].includes(view)) startFeed(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { stopFeed?.(); stopFeed = undefined; } else if (['home', 'contribute', 'refine'].includes(view)) startFeed(); });
 window.addEventListener('offline', () => showStatus('인터넷 연결이 끊겼어요. 연결 후 다시 시도해주세요.', true));
 
 try {

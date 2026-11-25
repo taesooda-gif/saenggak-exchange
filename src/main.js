@@ -19,6 +19,10 @@ const syncedDiscussions = new Map();
 let requestVersion = 0, requestGroups = [];
 const decidingRequests = new Set();
 let canPin = false, pinnedId = '', pinnedIdea = null, stopPinnedIdea, stopModerator;
+let stopNotifications, stopUnreadNotifications, notificationVersion = 0, notificationReady = false;
+let notifications = [], unreadNotifications = [], previousNotifications = [], notificationCursor, moreNotifications = false;
+let detailTarget = null, highlightedTarget = '';
+const readNotifications = new Set();
 
 function refreshPinViews() { renderFeed(); if (view === 'detail') renderDetail(); }
 function watchPinnedIdea(id) {
@@ -70,7 +74,7 @@ function empty(title, description, action) {
 }
 function stopDetail() {
   [stopIdea, stopComments, stopRefinements].forEach(stop => stop?.());
-  stopIdea = stopComments = stopRefinements = undefined; detailVersion++;
+  stopIdea = stopComments = stopRefinements = undefined; detailVersion++; detailTarget = null; highlightedTarget = '';
 }
 function stopChat() { stopMessages?.(); stopMessages = undefined; }
 function displayView(name) {
@@ -83,11 +87,13 @@ function displayView(name) {
   if (name !== 'detail') stopDetail();
   if (name !== 'chat') stopChat();
   if (name === 'chat') renderRooms();
+  if (name === 'notifications') $('#connection-status').hidden = true;
+  renderNotifications();
   renderRequests();
   window.scrollTo({ top: 0, behavior: 'instant' });
 }
 function navigate(name, updateHash = true) {
-  if (!['home', 'write', 'contribute', 'refine', 'chat'].includes(name)) name = 'home';
+  if (!['home', 'write', 'contribute', 'refine', 'chat', 'notifications'].includes(name)) name = 'home';
   displayView(name);
   if (updateHash) history.replaceState(null, '', `#${name}`);
 }
@@ -197,6 +203,7 @@ async function setIdentity(next) {
     closeIdeaEditor(true);
     closeRefinementEditor(true);
     activeUid = next?.uid || '';
+    resetNotifications();
     stopRooms?.(); stopRooms = undefined; stopModerator?.(); stopModerator = undefined;
     stopInbox?.(); stopInbox = undefined; requestVersion++; requestGroups = []; decidingRequests.clear();
     $('#request-error').hidden = true; $('#request-result').textContent = ''; renderRequests();
@@ -344,6 +351,8 @@ async function openIdea(id, updateHash = true, focus = '') {
   if (!store) return;
   stopDetail(); stopChat(); selectedId = id; currentIdea = null; previousComments = []; recentComments = [];
   const version = detailVersion;
+  detailTarget = typeof focus === 'object' ? focus : null;
+  highlightedTarget = detailTarget ? `${detailTarget.type}-${detailTarget.itemId}` : '';
   refinementRows = []; contributionReferences.clear(); commentContext = { refinementId: '', replyTo: '' }; renderCommentContext();
   $('#refinements').replaceChildren(); $('#refinement-status').textContent = '구체화안을 불러오고 있어요.';
   $('#comments').replaceChildren(); $('#detail-title').textContent = '생각을 불러오고 있어요.';
@@ -355,7 +364,7 @@ async function openIdea(id, updateHash = true, focus = '') {
     if (version !== detailVersion || selectedId !== id) return;
     currentIdea = idea;
     $('#connection-status').hidden = true;
-    if (!idea) { $('#detail-title').textContent = '생각을 찾을 수 없어요.'; $('#comment-form').hidden = true; return; }
+    if (!idea) { detailTarget = null; $('#detail-title').textContent = '생각을 찾을 수 없어요.'; $('#comment-form').hidden = true; return; }
     $('#comment-form').hidden = false; renderDetail();
     if (focus === 'refine' && idea.postType !== 'notice') { focus = ''; $('#refinement-heading').focus(); }
     if (user && !interestState.has(id)) {
@@ -409,11 +418,13 @@ function contributionQuote(cid, label) {
   return quote;
 }
 function renderRefinements() {
-  const list = $('#refinements'); list.replaceChildren();
+  const list = $('#refinements'), focused = list.contains(document.activeElement) ? document.activeElement.id : '';
+  list.replaceChildren();
   $('#refinement-section').hidden = !currentIdea || (currentIdea.postType === 'notice' && !refinementRows.length);
   if (!refinementRows.length) list.append(el('p', 'sg-empty', '아직 구체화안이 없어요. 작게 해볼 일 하나부터 적어보세요.'));
   refinementRows.forEach(item => {
     const card = el('article', 'sg-refinement'); card.id = `refinement-${item.id}`;
+    if (card.id === highlightedTarget) { card.classList.add('sg-notification-target'); card.tabIndex = -1; }
     card.append(el('span', 'sg-tag', '공개 구체화안'), el('h3', '', item.title), el('p', 'sg-caption', `${item.authorName} · ${when(item.createdAt)}`));
     card.append(el('h4', '', '누구에게 도움이 되나요?'), el('p', 'sg-refinement-copy', item.audience));
     card.append(el('h4', '', '처음 해볼 작은 일'), el('p', 'sg-refinement-copy', item.firstStep));
@@ -422,6 +433,8 @@ function renderRefinements() {
     card.append(button('이 안에 보태기', () => setCommentContext(item.id, ''), 'sg-button sg-primary'));
     list.append(card);
   });
+  if (focused) document.getElementById(focused)?.focus({ preventScroll: true });
+  focusNotificationTarget();
 }
 function renderCommentContext() {
   const { refinementId, replyTo } = commentContext;
@@ -471,11 +484,13 @@ $('#refinement-form').addEventListener('submit', async event => {
 });
 function merged(oldRows, newRows) { return [...new Map([...oldRows, ...newRows].map(item => [item.id, item])).values()].sort((a, b) => milliseconds(a.createdAt) - milliseconds(b.createdAt)); }
 function renderComments() {
-  const list = $('#comments'); list.replaceChildren();
+  const list = $('#comments'), focused = list.contains(document.activeElement) ? document.activeElement.id : '';
+  list.replaceChildren();
   const rows = merged(previousComments, recentComments);
   if (!rows.length) list.append(el('p', 'sg-empty', '아직 보탬이 없어요. 첫 경험이나 질문을 남겨주세요.'));
   rows.forEach(comment => {
     const item = el('div', 'sg-comment'); item.id = `contribution-${comment.id}`;
+    if (item.id === highlightedTarget) { item.classList.add('sg-notification-target'); item.tabIndex = -1; }
     item.append(el('span', 'sg-caption', `${comment.authorName} · ${comment.kind} · ${when(comment.createdAt)}`));
     if (comment.refinementId) {
       const target = refinementRows.find(row => row.id === comment.refinementId);
@@ -488,6 +503,8 @@ function renderComments() {
     if (currentIdea?.postType !== 'notice') actions.append(button('이 보탬에서 구체화하기', () => openRefinementEditor(comment.id), 'sg-button sg-action-link'));
     item.append(actions); list.append(item);
   });
+  if (focused) document.getElementById(focused)?.focus({ preventScroll: true });
+  focusNotificationTarget();
 }
 $('#older-comments').addEventListener('click', () => run($('#older-comments'), async () => {
   const oldest = merged(previousComments, recentComments)[0]; if (!oldest) return;
@@ -680,6 +697,108 @@ $('#chat-form').addEventListener('submit', event => {
     await api.sendMessage(store, who, id, text); if (selectedRoom?.id === id) $('#message-input').value = '';
   });
 });
+function resetNotifications() {
+  stopNotifications?.(); stopUnreadNotifications?.();
+  stopNotifications = stopUnreadNotifications = undefined; notificationVersion++;
+  notifications = []; unreadNotifications = []; previousNotifications = [];
+  readNotifications.clear(); notificationCursor = undefined; moreNotifications = false; notificationReady = false;
+  $('#notification-error').textContent = ''; renderNotifications();
+}
+function startNotifications() {
+  resetNotifications();
+  if (!user || !profile) return;
+  const uid = user.uid, version = notificationVersion;
+  const valid = () => version === notificationVersion && user?.uid === uid;
+  const fail = error => {
+    if (!valid()) return;
+    notificationReady = true; $('#notification-error').textContent = `알림을 불러오지 못했어요. ${errorText(error)}`; renderNotifications();
+  };
+  stopNotifications = api.watchNotifications(store, uid, (rows, last, more) => {
+    if (!valid()) return;
+    if (previousNotifications.length) previousNotifications = merged(previousNotifications, notifications);
+    notifications = rows; notificationReady = true;
+    rows.filter(item => item.readAt).forEach(item => readNotifications.add(item.id));
+    if (!previousNotifications.length) { notificationCursor = last; moreNotifications = more; }
+    renderNotifications();
+  }, fail);
+  stopUnreadNotifications = api.watchUnreadNotifications(store, uid, rows => {
+    if (!valid()) return;
+    const ids = new Set(rows.map(item => item.id));
+    const removed = unreadNotifications.filter(item => !ids.has(item.id) && previousNotifications.some(old => old.id === item.id));
+    unreadNotifications = rows; renderNotifications();
+    // A removed item may have been read on another device or left the bounded query.
+    removed.forEach(item => api.getNotification(store, uid, item.id).then(latest => {
+      if (!valid() || !latest?.readAt) return;
+      readNotifications.add(item.id); renderNotifications();
+    }).catch(fail));
+  }, fail);
+}
+function renderNotifications() {
+  const signed = Boolean(user && profile);
+  const unread = unreadNotifications.filter(item => !readNotifications.has(item.id));
+  const count = unread.length, label = count >= 50 ? '50+' : String(count);
+  $('#notification-button').hidden = !signed;
+  $('#notification-button').setAttribute('aria-label', count ? `알림, 읽지 않은 소식 ${label}개` : '알림');
+  $('#notification-button').setAttribute('aria-pressed', String(view === 'notifications'));
+  $('#notification-badge').hidden = !count; $('#notification-badge').textContent = label;
+  $('#notification-notice').hidden = !signed || !count || view === 'notifications';
+  $('#notification-summary').textContent = count ? `내 생각에 새 이야기가 ${label}개 도착했어요.` : '';
+  const list = $('#notification-list'); list.replaceChildren();
+  $('#more-notifications').hidden = !signed || !moreNotifications;
+  if (!signed) { list.append(empty('내 생각의 새 소식을 받아보세요.', '참여하던 계정으로 들어오면 알림을 확인할 수 있어요.')); list.append(button('로그인 · 닉네임으로 시작', () => person(), 'sg-button sg-primary')); return; }
+  const rows = merged(previousNotifications, [...unreadNotifications, ...notifications]).sort((a, b) => {
+    const readA = Boolean(a.readAt || readNotifications.has(a.id)), readB = Boolean(b.readAt || readNotifications.has(b.id));
+    return Number(readA) - Number(readB) || milliseconds(b.createdAt) - milliseconds(a.createdAt) || b.id.localeCompare(a.id);
+  });
+  if (!rows.length) list.append(empty(notificationReady ? '아직 도착한 알림이 없어요.' : '알림을 불러오고 있어요.', notificationReady ? '다른 사람이 내 생각에 보태거나 구체화안을 올리면 여기에 알려드릴게요.' : '잠시만 기다려주세요.'));
+  rows.forEach(item => {
+    const isRead = Boolean(item.readAt || readNotifications.has(item.id));
+    const card = button('', () => openNotification(item), `sg-notification${isRead ? ' is-read' : ''}`);
+    const meta = el('span', 'sg-notification-meta');
+    meta.append(el('span', 'sg-tag', isRead ? '읽음' : '새 소식'), el('span', '', when(item.createdAt)));
+    card.append(meta, el('strong', '', `${item.actorName}님이 ${item.type === 'refinement' ? '구체화안을 올렸어요' : '생각을 보탰어요'}`), el('span', 'sg-notification-idea', item.ideaTitle), el('span', 'sg-notification-preview', item.text), el('span', 'sg-notification-link', item.type === 'refinement' ? '구체화안 보고 이어가기' : '보탬 보고 이어가기'));
+    list.append(card);
+  });
+}
+async function openNotification(item) {
+  const uid = user?.uid, version = notificationVersion;
+  if (!uid) return;
+  // Fetch an older contribution directly, even when it is outside the latest 50.
+  const source = item.type === 'contribution' ? await api.getContribution(store, item.ideaId, item.itemId) : null;
+  if (user?.uid !== uid || version !== notificationVersion) return;
+  if (item.type === 'contribution' && !source) throw new Error('연결된 보탬을 찾을 수 없어요. 알림은 읽지 않은 상태로 두었어요.');
+  await openIdea(item.ideaId, true, { ...item, uid, notificationVersion: version });
+  if (source) { previousComments = [source]; contributionReferences.set(source.id, source); renderComments(); }
+}
+function focusNotificationTarget() {
+  const target = detailTarget;
+  if (!target || view !== 'detail' || !currentIdea || selectedId !== target.ideaId) return;
+  const node = document.getElementById(`${target.type}-${target.itemId}`);
+  if (!node) return;
+  detailTarget = null;
+  const version = detailVersion;
+  requestAnimationFrame(() => {
+    if (version !== detailVersion || view !== 'detail') return;
+    const current = document.getElementById(`${target.type}-${target.itemId}`);
+    if (!current) return;
+    current.classList.add('sg-notification-target'); current.tabIndex = -1;
+    current.focus({ preventScroll: true }); current.scrollIntoView({ block: 'center' });
+    if (user?.uid !== target.uid || notificationVersion !== target.notificationVersion || target.readAt || readNotifications.has(target.id)) return;
+    api.readNotification(store, target.uid, target.id).then(() => {
+      if (user?.uid !== target.uid || notificationVersion !== target.notificationVersion) return;
+      readNotifications.add(target.id); renderNotifications();
+    }).catch(error => { if (user?.uid === target.uid) showStatus(`내용은 열었지만 알림을 읽음으로 저장하지 못했어요. ${errorText(error)}`, true); });
+  });
+}
+$('#more-notifications').addEventListener('click', () => run($('#more-notifications'), async () => {
+  const uid = user?.uid, version = notificationVersion;
+  if (!uid || !notificationCursor) return;
+  const visible = notifications;
+  const result = await api.olderNotifications(store, uid, notificationCursor);
+  if (user?.uid !== uid || version !== notificationVersion) return;
+  previousNotifications = merged(previousNotifications, [...visible, ...result.rows]); notificationCursor = result.cursor; moreNotifications = result.more; renderNotifications();
+}));
+
 function identityChanged() {
   $('#profile-button').textContent = profile ? `${profile.displayName}님` : '시작하기 · 로그인';
   stopModerator?.(); stopModerator = undefined; canPin = false;
@@ -704,7 +823,7 @@ function identityChanged() {
       api.refreshDiscussion(store, room.id).catch(error => { syncedDiscussions.delete(key); console.error(error); showStatus('대화는 사용할 수 있지만, 둘러보기의 참여 표시를 갱신하지 못했어요. 잠시 후 새로고침해주세요.', true); });
     });
   }, error => showStatus(errorText(error), true));
-  renderRooms(); watchOwnerRequests();
+  renderRooms(); watchOwnerRequests(); startNotifications();
 }
 function route() {
   const hash = decodeURIComponent(location.hash.slice(1));

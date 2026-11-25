@@ -222,3 +222,20 @@ body { margin:0; background:light-dark(#fff,#17181b); }
 #sg-community #refinement-form textarea { min-height:90px; }
 #sg-community #refinement-error:empty { display:none; }
 @media(max-width:620px) { #sg-community .sg-refinement { padding:16px; } #sg-community #refinement-section .sg-thread-label { align-items:flex-start; flex-direction:column; } }
+
+#sg-community .sg-account-actions { display:flex; gap:8px; align-items:center; flex-shrink:0; }
+#sg-community #notification-button { white-space:nowrap; }
+#sg-community .sg-notifications { display:grid; gap:12px; max-width:860px; }
+#sg-community .sg-notification { display:flex; flex-direction:column; gap:10px; width:100%; text-align:left; border:1px solid var(--sg-line); border-left:4px solid var(--sg-accent); background:var(--sg-wash); padding:20px; border-radius:8px; cursor:pointer; }
+#sg-community .sg-notification.is-read { border-left-color:var(--sg-line); background:var(--sg-paper); }
+#sg-community .sg-notification:hover { border-color:var(--sg-accent-ink); }
+#sg-community .sg-notification strong { font-size:17px; }
+#sg-community .sg-notification-meta { display:flex; gap:12px; flex-wrap:wrap; align-items:center; color:var(--sg-soft); font-size:14px; }
+#sg-community .sg-notification-idea { font-weight:600; font-size:16px; overflow-wrap:anywhere; }
+#sg-community .sg-notification-preview { color:var(--sg-soft); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; font-size:15px; }
+#sg-community .sg-notification-link { color:var(--sg-accent-ink); font-size:14px; font-weight:600; }
+#sg-community .sg-notification-help { margin:24px 0; }
+#sg-community .sg-notification-target { outline:2px solid var(--sg-accent-ink); outline-offset:5px; }
+#sg-community #notification-error:empty { display:none; }
+@media(max-width:1100px) { #sg-community .sg-header { flex-wrap:wrap; gap:12px; } #sg-community .sg-nav { order:3; flex-basis:100%; justify-content:center; } }
+@media(max-width:620px) { #sg-community .sg-notification { padding:16px; } #sg-community .sg-account-actions { margin-left:auto; } #sg-community .sg-legacy-link { order:4; } }

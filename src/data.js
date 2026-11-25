@@ -113,11 +113,15 @@ export async function updateIdea(store, uid, original, { title, body, topic }) {
 export async function addContribution(store, person, id, { kind, text, refinementId = '', replyTo = '' }) {
   const parent = doc(store.db, 'ideas', id);
   const ref = doc(collection(parent, 'contributions'));
-  const batch = writeBatch(store.db);
-  batch.set(ref, { kind, text, refinementId, replyTo, authorId: person.uid, authorName: person.name, createdAt: serverTimestamp() });
-  batch.set(doc(parent, 'activities', `c_${ref.id}`), { type: 'contribution', refId: ref.id, actorId: person.uid, createdAt: serverTimestamp() });
-  batch.update(parent, { contributionCount: increment(1), lastContributionId: ref.id, lastActivityAt: serverTimestamp() });
-  await batch.commit();
+  await runTransaction(store.db, async batch => {
+    const idea = await batch.get(parent);
+    if (!idea.exists()) throw new Error('생각을 찾을 수 없어요.');
+    batch.set(ref, { kind, text, refinementId, replyTo, authorId: person.uid, authorName: person.name, createdAt: serverTimestamp() });
+    batch.set(doc(parent, 'activities', `c_${ref.id}`), { type: 'contribution', refId: ref.id, actorId: person.uid, createdAt: serverTimestamp() });
+    batch.update(parent, { contributionCount: increment(1), lastContributionId: ref.id, lastActivityAt: serverTimestamp() });
+    notifyAuthor(batch, store, person, idea, ref.id, 'contribution', text);
+  });
+  return ref.id;
 }
 export const getContribution = async (store, id, cid) => {
   const snapshot = await getDoc(doc(store.db, 'ideas', id, 'contributions', cid));
@@ -128,13 +132,41 @@ export function watchRefinements(store, id, callback, failure) {
 }
 export async function addRefinement(store, person, id, { title, audience, firstStep, sourceContributionId = '' }) {
   const parent = doc(store.db, 'ideas', id), ref = doc(collection(parent, 'refinements'));
-  const batch = writeBatch(store.db);
-  batch.set(ref, { title, audience, firstStep, sourceContributionId, authorId: person.uid, authorName: person.name, createdAt: serverTimestamp() });
-  batch.set(doc(parent, 'activities', `r_${ref.id}`), { type: 'refinement', refId: ref.id, actorId: person.uid, createdAt: serverTimestamp() });
-  batch.update(parent, { refinementCount: increment(1), lastRefinementId: ref.id, lastActivityAt: serverTimestamp() });
-  await batch.commit();
+  await runTransaction(store.db, async batch => {
+    const idea = await batch.get(parent);
+    if (!idea.exists()) throw new Error('생각을 찾을 수 없어요.');
+    batch.set(ref, { title, audience, firstStep, sourceContributionId, authorId: person.uid, authorName: person.name, createdAt: serverTimestamp() });
+    batch.set(doc(parent, 'activities', `r_${ref.id}`), { type: 'refinement', refId: ref.id, actorId: person.uid, createdAt: serverTimestamp() });
+    batch.update(parent, { refinementCount: increment(1), lastRefinementId: ref.id, lastActivityAt: serverTimestamp() });
+    notifyAuthor(batch, store, person, idea, ref.id, 'refinement', title);
+  });
   return ref.id;
 }
+function notifyAuthor(transaction, store, person, idea, itemId, type, text) {
+  const original = idea.data();
+  if (original.authorId === person.uid) return;
+  transaction.set(doc(store.db, 'profiles', original.authorId, 'notifications', `${idea.id}_${type}_${itemId}`), {
+    ideaId: idea.id, itemId, type, actorId: person.uid, actorName: person.name,
+    ideaTitle: original.title, text, createdAt: serverTimestamp(), readAt: null,
+  });
+}
+export const watchNotifications = (store, uid, callback, failure) => onSnapshot(
+  query(collection(store.db, 'profiles', uid, 'notifications'), orderBy('createdAt', 'desc'), orderBy(documentId(), 'desc'), limit(20)),
+  snapshot => callback(snapshot.docs.map(row), snapshot.docs.at(-1), snapshot.size === 20), failure,
+);
+export const watchUnreadNotifications = (store, uid, callback, failure) => onSnapshot(
+  query(collection(store.db, 'profiles', uid, 'notifications'), where('readAt', '==', null), limit(50)),
+  snapshot => callback(snapshot.docs.map(row)), failure,
+);
+export async function olderNotifications(store, uid, cursor) {
+  const snapshot = await getDocs(query(collection(store.db, 'profiles', uid, 'notifications'), orderBy('createdAt', 'desc'), orderBy(documentId(), 'desc'), startAfter(cursor), limit(20)));
+  return { rows: snapshot.docs.map(row), cursor: snapshot.docs.at(-1), more: snapshot.size === 20 };
+}
+export const readNotification = (store, uid, id) => updateDoc(doc(store.db, 'profiles', uid, 'notifications', id), { readAt: serverTimestamp() });
+export const getNotification = async (store, uid, id) => {
+  const snapshot = await getDoc(doc(store.db, 'profiles', uid, 'notifications', id));
+  return snapshot.exists() ? row(snapshot) : null;
+};
 export async function readInterest(store, uid, id) {
   return (await getDoc(doc(store.db, 'ideas', id, 'interests', uid))).exists();
 }

@@ -14,6 +14,11 @@ service cloud.firestore {
       return signedIn() && data.authorId == request.auth.uid
         && data.authorName == get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data.displayName;
     }
+    function authorNotified(id, itemId, type) {
+      let uid = get(ideaPath(id)).data.authorId;
+      let notification = /databases/$(database)/documents/profiles/$(uid)/notifications/$(id + '_' + type + '_' + itemId);
+      return uid == request.auth.uid || getAfter(notification).data.createdAt == request.time;
+    }
 
     // Pin authority is granted in the Firebase console, never by a nickname or client write.
     match /moderators/{uid} {
@@ -46,6 +51,33 @@ service cloud.firestore {
         && request.resource.data.displayName is string
         && request.resource.data.displayName.size() >= 2
         && request.resource.data.displayName.size() <= 20;
+
+      match /notifications/{nid} {
+        allow get: if signedIn() && request.auth.uid == uid;
+        allow list: if signedIn() && request.auth.uid == uid && bounded(50);
+        function validNotification() {
+          let data = request.resource.data;
+          let idea = get(ideaPath(data.ideaId)).data;
+          let kind = data.type == 'contribution' ? 'contributions' : 'refinements';
+          let source = /databases/$(database)/documents/ideas/$(data.ideaId)/$(kind)/$(data.itemId);
+          let item = getAfter(source).data;
+          return data.keys().hasAll(['ideaId', 'itemId', 'type', 'actorId', 'actorName', 'ideaTitle', 'text', 'createdAt', 'readAt'])
+            && data.keys().hasOnly(['ideaId', 'itemId', 'type', 'actorId', 'actorName', 'ideaTitle', 'text', 'createdAt', 'readAt'])
+            && data.type in ['contribution', 'refinement']
+            && data.ideaId is string && data.ideaId.size() <= 128 && data.itemId is string && data.itemId.size() <= 128
+            && nid == data.ideaId + '_' + data.type + '_' + data.itemId
+            && uid == idea.authorId && uid != request.auth.uid
+            && data.actorId == request.auth.uid && data.actorId == item.authorId && data.actorName == item.authorName
+            && data.ideaTitle == idea.title && data.text == (data.type == 'contribution' ? item.text : item.title)
+            && !exists(source) && item.createdAt == request.time
+            && data.createdAt == request.time && data.readAt == null;
+        }
+        allow create: if signedIn() && validNotification();
+        allow update: if signedIn() && request.auth.uid == uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt'])
+          && request.resource.data.readAt == request.time;
+        allow delete: if false;
+      }
     }
 
     match /ideas/{id} {
@@ -162,6 +194,7 @@ service cloud.firestore {
         allow get: if true;
         allow list: if bounded(50);
         allow create: if named(request.resource.data)
+          && authorNotified(id, cid, 'contribution')
           && request.resource.data.keys().hasOnly(['authorId', 'authorName', 'kind', 'text', 'createdAt', 'refinementId', 'replyTo'])
           && contextValid(request.resource.data)
           && request.resource.data.kind in ['경험', '질문', '제안']
@@ -175,6 +208,7 @@ service cloud.firestore {
         allow get: if true;
         allow list: if bounded(20);
         allow create: if named(request.resource.data)
+          && authorNotified(id, rid, 'refinement')
           && get(ideaPath(id)).data.get('postType', 'idea') != 'notice'
           && request.resource.data.keys().hasOnly(['title', 'audience', 'firstStep', 'sourceContributionId', 'authorId', 'authorName', 'createdAt'])
           && request.resource.data.title is string && request.resource.data.title.size() >= 1 && request.resource.data.title.size() <= 100

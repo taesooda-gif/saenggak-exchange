@@ -18,10 +18,11 @@
       <button data-view="refine" aria-pressed="false">구체화하기</button>
     </nav>
     <button class="sg-button sg-legacy-link" data-view="chat" id="legacy-chat-button" hidden>기존 비공개 대화<span id="request-badge" class="sg-request-badge" hidden></span></button>
-    <button class="sg-button sg-profile" id="profile-button">시작하기 · 로그인</button>
+    <div class="sg-account-actions"><button class="sg-button" id="notification-button" data-view="notifications" hidden>알림<span id="notification-badge" class="sg-request-badge" hidden></span></button><button class="sg-button sg-profile" id="profile-button">시작하기 · 로그인</button></div>
   </header>
   <main class="sg-body">
     <p id="connection-status" class="sg-connection" role="status">생각들을 불러오고 있어요.</p>
+    <section id="notification-notice" class="sg-request-notice" aria-label="내 생각의 새 소식" hidden><strong id="notification-summary" role="status"></strong><button class="sg-button sg-primary" data-view="notifications">알림 보기</button></section>
     <section id="request-notice" class="sg-request-notice" aria-label="내 글의 참여 신청" hidden>
       <div><strong id="request-notice-title"></strong><p class="sg-caption">글쓴이가 수락하면 함께 대화를 나눌 수 있어요.</p></div>
       <button class="sg-button sg-primary" data-view="chat">신청 확인하기</button>
@@ -81,6 +82,13 @@
           <p class="sg-caption">이 이야기는 누구나 읽고 이어서 보탤 수 있어요.</p><button class="sg-button sg-primary" type="submit">이 생각에 보태기</button>
         </form>
       </article>
+    </section>
+    <section data-panel="notifications" hidden>
+      <div class="sg-section-top"><div><h1>내 생각에 도착한 이야기</h1><p class="sg-caption">다른 사람이 내 생각에 남긴 보탬과 구체화안을 모았어요.<br>알림을 누르면 해당 내용으로 이동하고 읽음으로 표시돼요.</p></div></div>
+      <p id="notification-error" class="sg-error" role="alert"></p>
+      <div id="notification-list" class="sg-notifications"></div>
+      <button id="more-notifications" class="sg-button sg-more" hidden>이전 알림 더 보기</button>
+      <p class="sg-caption sg-notification-help">알림은 이 사이트 안에 표시돼요. 기능이 생긴 이후의 새 소식부터 쌓이며, 내가 직접 쓴 내용은 제외해요.</p>
     </section>
     <section data-panel="chat" hidden>
       <div class="sg-section-top"><div><h1>기존 비공개 대화</h1><p class="sg-caption">기존 대화와 참여자는 그대로예요. 새로운 생각은 보태기와 구체화하기에서 공개로 이어가요.</p></div><button class="sg-button" data-view="refine">구체화하기로 가기</button></div>
